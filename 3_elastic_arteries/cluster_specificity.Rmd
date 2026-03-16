@@ -1,0 +1,3850 @@
+---
+title: "R Notebook"
+output: html_notebook
+editor_options: 
+  chunk_output_type: console
+---
+
+ This code is for comparison of cluster specificity across different integration methods and gene homology
+ 
+
+Upload all 4 methods with 3 homology options = 12 datasets
+
+```{r setup, echo=FALSE, include=FALSE}
+suppressPackageStartupMessages({
+  library(cluster)
+  library(Seurat)
+  library(SeuratObject)
+  library(cowplot)
+  library(stats)
+  library(data.table)
+  library(tidyverse)
+  library(ggsci)
+  library(scCustomize)
+  library(patchwork)
+  library(sctransform)
+  library(MatrixGenerics)
+  library(openxlsx)
+  library(RColorBrewer)
+  library(MetBrewer)
+  library(pheatmap)
+  library(corrplot)
+  library(DESeq2)
+  library(viridis)
+  library(scales)
+  library(ggpubr)
+  library(SCpubr)
+  library(ggplotify)
+  library(bluster)
+  library(stringi)
+  library(gridExtra)
+  library(limma)
+  library(muscat)
+  library(scran)
+
+  options(scipen = 999)
+  options(repr.matrix.max.rows = 20)
+  options(repr.matrix.max.cols = 50)
+})
+set.seed(8899)
+my_pal1 <- MetBrewer::met.brewer('Egypt', n = 4, type = 'discrete')
+my_pal2 <- MetBrewer::met.brewer('Signac', n = 14, type = 'discrete')
+options(width = 200)
+
+
+setwd(
+  "/faststorage/project/THOR/diana/integration_pigs_with_WT/integrated_pig_mice_hum/closer/more_closer/SMC/after_bengal/cluster_specificity"
+)
+knitr::opts_knit$set(root.dir = "/faststorage/project/THOR/diana/integration_pigs_with_WT/integrated_pig_mice_hum/closer/more_closer/SMC/after_bengal/cluster_specificity")
+
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(dev = 'pdf')
+```
+
+# RPCA
+
+```{r include=FALSE}
+# List of .rds files
+files <- list.files(path = '~/THOR/diana/integration_pigs_with_WT/integrated_pig_mice_hum/closer/more_closer/SMC/bengal_less_mice_5/results/results/seuratRPCA/cross_species/integrated_h5ad/', pattern = '\\.rds', full.names = TRUE)
+
+# Directory to work in
+work_dir <- "/faststorage/project/THOR/diana/integration_pigs_with_WT/integrated_pig_mice_hum/closer/more_closer/SMC/after_bengal/cluster_specificity"
+
+# Final species genes
+final_species_genes <- readRDS("/faststorage/project/THOR/diana/integration_pigs_with_WT/integrated_pig_mice_hum/closer/more_closer/biomart_109_orth_new.rds")
+final_species_genes$Human_gene_name_v98 <- ifelse(is.na(final_species_genes$Human_gene_name_v98), final_species_genes$`Human Ensembl ID`, final_species_genes$Human_gene_name_v98)
+final_species_genes$Human_gene_name_v98 <- ifelse(final_species_genes$Human_gene_name_v98 == '', final_species_genes$`Human Ensembl ID`, final_species_genes$Human_gene_name_v98)
+```
+
+
+```{r include=FALSE}
+# Loop through each file
+for (file in files) {
+  my_data <- readRDS(file)
+
+  my_counts <- GetAssayData(object = my_data, assay = 'RNA', slot = 'data')
+  rownames(my_counts) <- gsub(pattern = '-0', replacement = '', x = rownames(my_counts))
+  rownames(my_counts) %in% final_species_genes$`Pig Ensembl ID` %>% table()
+  rownames(my_counts)[!rownames(my_counts) %in% final_species_genes$`Pig Ensembl ID`]
+
+  my_counts <- my_counts[rownames(my_counts)[rownames(my_counts) %in% final_species_genes$`Pig Ensembl ID`],]
+
+  rownames(final_species_genes) <- final_species_genes$`Pig Ensembl ID`
+  df <- data.frame(pig_ens_data = rownames(my_counts), transl_human_gene = final_species_genes[rownames(my_counts), 'Human_gene_name_v98'], transl_hum_ens = final_species_genes[rownames(my_counts), 'Human Ensembl ID'])
+
+  rownames(df) <- df$pig_ens_data
+  rownames(my_counts) <- df[rownames(my_counts), 'transl_human_gene']
+
+  my_data[["RNA_genes"]] <- CreateAssayObject(data = my_counts)
+  DefaultAssay(my_data) <- "RNA_genes"
+  
+  # Save the modified Seurat object
+  saveRDS(my_data, file = paste0(work_dir, '/', basename(file)))
+  
+  # Clean up memory
+  rm(my_counts, my_data, df)
+}
+
+print("All files processed.")
+```
+
+# CCA
+
+```{r include=FALSE}
+# List of .rds files
+files <- list.files(path = '~/THOR/diana/integration_pigs_with_WT/integrated_pig_mice_hum/closer/more_closer/SMC/bengal_less_mice_5/results/results/seuratCCA/cross_species/integrated_h5ad/', pattern = '\\.rds', full.names = TRUE)
+
+# Directory to work in
+work_dir <- "/faststorage/project/THOR/diana/integration_pigs_with_WT/integrated_pig_mice_hum/closer/more_closer/SMC/after_bengal/cluster_specificity"
+
+# Final species genes
+final_species_genes <- readRDS("/faststorage/project/THOR/diana/integration_pigs_with_WT/integrated_pig_mice_hum/closer/more_closer/biomart_109_orth_new.rds")
+final_species_genes$Human_gene_name_v98 <- ifelse(is.na(final_species_genes$Human_gene_name_v98), final_species_genes$`Human Ensembl ID`, final_species_genes$Human_gene_name_v98)
+final_species_genes$Human_gene_name_v98 <- ifelse(final_species_genes$Human_gene_name_v98 == '', final_species_genes$`Human Ensembl ID`, final_species_genes$Human_gene_name_v98)
+
+# Loop through each file
+for (file in files) {
+  my_data <- readRDS(file)
+
+  my_counts <- GetAssayData(object = my_data, assay = 'RNA', slot = 'data')
+  rownames(my_counts) <- gsub(pattern = '-0', replacement = '', x = rownames(my_counts))
+  rownames(my_counts) %in% final_species_genes$`Pig Ensembl ID` %>% table()
+  rownames(my_counts)[!rownames(my_counts) %in% final_species_genes$`Pig Ensembl ID`]
+
+  my_counts <- my_counts[rownames(my_counts)[rownames(my_counts) %in% final_species_genes$`Pig Ensembl ID`],]
+
+  rownames(final_species_genes) <- final_species_genes$`Pig Ensembl ID`
+  df <- data.frame(pig_ens_data = rownames(my_counts), transl_human_gene = final_species_genes[rownames(my_counts), 'Human_gene_name_v98'], transl_hum_ens = final_species_genes[rownames(my_counts), 'Human Ensembl ID'])
+
+  rownames(df) <- df$pig_ens_data
+  rownames(my_counts) <- df[rownames(my_counts), 'transl_human_gene']
+
+  my_data[["RNA_genes"]] <- CreateAssayObject(data = my_counts)
+  DefaultAssay(my_data) <- "RNA_genes"
+  
+  # Save the modified Seurat object
+  saveRDS(my_data, file = paste0(work_dir, '/', basename(file)))
+  
+  # Clean up memory
+  rm(my_counts, my_data, df)
+}
+
+print("All files processed.")
+```
+
+# scVI and scANVI: create a list
+
+```{r}
+work_dir <- '/faststorage/project/THOR/diana/integration_pigs_with_WT/integrated_pig_mice_hum/closer/more_closer/SMC/bengal_less_mice_5/results/results/seurat_for_py'
+files <- list.files(path = '/faststorage/project/THOR/diana/integration_pigs_with_WT/integrated_pig_mice_hum/closer/more_closer/SMC/bengal_less_mice_5/results/results/seurat_for_py', pattern = '\\.rds', full.names = TRUE)
+
+py_based <- list()
+for(i in  seq_along(files) ){
+  name_f <-str_split(str_split(files[i], pattern = '/')[[1]][15], pattern = '_')[[1]]
+  name_f <- name_f[-grep(pattern = 'matrix', x = name_f)]
+  name_f <- unique(name_f)
+  x <- match(1, str_detect(string = name_f, pattern = 'nf')) +1
+  y <- match(1, str_detect(string = name_f, pattern = 'Seurat'))-1
+  name_f <- paste0(name_f[  x: y ], collapse = '_')
+  print(name_f)
+  py_based[[name_f]] <- readRDS(files[i])
+}
+
+```
+
+# CCA and RPCA: create a list
+
+```{r}
+work_dir <- "/faststorage/project/THOR/diana/integration_pigs_with_WT/integrated_pig_mice_hum/closer/more_closer/SMC/after_bengal/cluster_specificity"
+files <- list.files(path = "/faststorage/project/THOR/diana/integration_pigs_with_WT/integrated_pig_mice_hum/closer/more_closer/SMC/after_bengal/cluster_specificity", pattern = '\\.rds', full.names = TRUE)
+
+r_based <- list()
+for(i in  seq_along(files) ){
+  name_f <- str_split(str_split(files[i], pattern = '/')[[1]][13], pattern = '_')[[1]]
+  # name_f <- name_f[-grep(pattern = 'matrix', x = name_f)]
+  # name_f <- unique(name_f)
+  x <- match(1, str_detect(string = name_f, pattern = 'nf')) +1
+  y <- match(1, str_detect(string = name_f, pattern = 'integrated'))-1
+  name_f <- paste0(name_f[  x: y ], collapse = '_')
+  print(name_f)
+  r_based[[name_f]] <- readRDS(files[i])
+}
+```
+
+# Choose the right clusterisation for R-based mathods
+__Silhouette does not make sense__
+
+```{r include=FALSE}
+#from https://github.com/MillerLab-CPHG/Human_athero_scRNA_meta/blob/main/integration_benchmarking/additional_integration_benchmark_metrics.R
+# Write a function to calculate clusters silhouette scores from a seurat object
+# Arg seurat obj: A seurat obj with reduced dims embedding like pca
+# Arg distance_matrix: distance matrix between cells in reduced dims embedding 
+# Value: A data.frame with silhouette scores for a given clustering resolution  
+calc_sil_scores = function(seurat_obj, distance_matrix) {
+  # Calculate distance matrix from seurat obj reduced dims embedding 
+  #dist_matrix = dist(x = Seurat::Embeddings(object = seurat_obj[[reduced_dims]])[, 1:30])
+  clusters = seurat_obj$seurat_clusters
+  sil = silhouette(x = as.numeric(x = as.factor(x = clusters)), 
+                   dist = distance_matrix)
+  # Add silhouette scores back into seurat obj metadata
+  #seurat_obj$silhouette_score = sil[, 3]
+  sil_df = data.frame(cluster=sil[, 1],
+                      neighbor=sil[, 2],
+                      sil_width=sil[, 3])
+  return(sil_df)
+}
+
+
+# Directory for saving output
+output_dir <- "/faststorage/project/THOR/diana/integration_pigs_with_WT/integrated_pig_mice_hum/closer/more_closer/SMC/after_bengal/cluster_specificity"
+
+# Define a range of resolutions to test
+res <- seq(0.1, 1, by = 0.1)
+
+# Loop through each Seurat object
+for (name in names(r_based)) {
+  my_data <- r_based[[name]]
+
+  # rPCA
+  rpca_pca_embeddings <- Embeddings(my_data, "pca")[, 1:30]
+  DefaultAssay(my_data) <- 'integrated'
+
+  # Calculate distance matrix
+  dist_matrix <- dist(x = rpca_pca_embeddings)
+  saveRDS(dist_matrix, paste0(output_dir, "/", name, "_distance_matrix.rds"))
+  
+  rpca_scores_list <- list()
+
+  for (i in seq_along(res)) {
+    # Cluster data
+    my_data <- FindClusters(my_data, resolution = res[i])
+  
+    # Calculate silhouette scores
+    rpca_scores_list[[i]] <- calc_sil_scores(my_data, dist_matrix)
+    names(rpca_scores_list)[[i]] = paste("res", 
+                                       as.character(res[i]), 
+                                       sep = "_")
+  }
+
+  # Create a single df with all the sil scores for the tested resolutions
+  rpca_resolutions_sil_df <- rbindlist(rpca_scores_list, idcol = "method")
+  rpca_resolutions_sil_df$method_name <- name
+  saveRDS(rpca_resolutions_sil_df, paste0(output_dir, "/", name, "_sil_scores_per_clustering_resolution.rds"))
+}
+```
+
+# For py based methods
+
+```{r include=FALSE}
+# Directory for saving output
+output_dir <- "/faststorage/project/THOR/diana/integration_pigs_with_WT/integrated_pig_mice_hum/closer/more_closer/SMC/after_bengal/cluster_specificity"
+
+# Define a range of resolutions to test
+res <- seq(0.1, 1, by = 0.1)
+
+# Loop through each Seurat object
+for (name in names(py_based)) {
+  my_data <- py_based[[name]]
+  
+if(str_detect(string = name, pattern = 'scANVI')){
+  rpca_pca_embeddings <- Embeddings(my_data, "X_scANVI")[, 1:10]
+} else rpca_pca_embeddings <- Embeddings(my_data, "X_scVI")[, 1:40] 
+  
+  # DefaultAssay(my_data) <- 'integrated'
+
+  # Calculate distance matrix
+  dist_matrix <- dist(x = rpca_pca_embeddings)
+  saveRDS(dist_matrix, paste0(output_dir, "/", name, "_distance_matrix.rds"))
+  
+  rpca_scores_list <- list()
+
+  for (i in seq_along(res)) {
+    # Cluster data
+    if(str_detect(string = name, pattern = 'scANVI')){
+      my_data <- RunUMAP(my_data, dims = 1:10, reduction = "X_scANVI", n.components = 2)
+    my_data <- FindNeighbors(my_data, dims = 1:10, reduction = "X_scANVI")
+    } else {
+      my_data <- RunUMAP(my_data, dims = 1:40, reduction = "X_scVI", n.components = 2)
+    my_data <- FindNeighbors(my_data, dims = 1:40, reduction = "X_scVI")
+    }
+      
+    
+    my_data <- FindClusters(my_data, resolution = res[i])
+  
+    # Calculate silhouette scores
+    rpca_scores_list[[i]] <- calc_sil_scores(my_data, dist_matrix)
+    names(rpca_scores_list)[[i]] = paste("res", 
+                                       as.character(res[i]), 
+                                       sep = "_")
+  }
+
+  # Create a single df with all the sil scores for the tested resolutions
+  rpca_resolutions_sil_df <- rbindlist(rpca_scores_list, idcol = "method")
+  rpca_resolutions_sil_df$method_name <- name
+  saveRDS(rpca_resolutions_sil_df, paste0(output_dir, "/", name, "_sil_scores_per_clustering_resolution.rds"))
+}
+```
+
+```{r}
+DimPlot(my_data, reduction = "umap",  group.by = 'smc_phenotypes', split.by = 'species')
+```
+
+```{r}
+res_sil_list <- list()
+files <- list.files(path = '/faststorage/project/THOR/diana/integration_pigs_with_WT/integrated_pig_mice_hum/closer/more_closer/SMC/after_bengal/cluster_specificity', pattern = '_sil_scores_per_clustering_resolution.rds')
+for(i in seq_along(files)){
+  res_sil_list[[i]] <- readRDS(files[i])
+}
+res_sil_scores_df <- bind_rows(res_sil_list)
+```
+
+```{r}
+res_sil_scores_df$method_name = factor(res_sil_scores_df$method_name)
+colnames(res_sil_scores_df)[1] <- '.id'
+res_sil_scores_df <- res_sil_scores_df[res_sil_scores_df$.id %in% c('res_0.3', 'res_0.4', 'res_0.5', 'res_0.6', 'res_0.7',  'res_0.9',   'res_1')]
+res_sil_scores_plot = res_sil_scores_df %>%
+  group_by(.id, method_name) %>%
+  summarize(mean_sil = mean(sil_width)) %>%
+  ggplot(aes(x=.id, y=mean_sil, fill=method_name)) + geom_col(position="dodge", width = 0.7) +
+  xlab("Integration Methods / Homology") +
+  ylab("Mean Silhouette score") +
+  # ggtitle("rPCA mean sil scores per clustering resolution") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "bottom") + theme_bw() 
+
+ggsave(file="Silh_resolutions.pdf",
+       plot = res_sil_scores_plot, width = 16, height = 4.5)
+```
+
+```{r include=FALSE}
+saveRDS(py_based, file = 'py_based_integration_methods.rds')
+saveRDS(r_based, file = 'r_based_integration_methods.rds')
+```
+
+```{r}
+py_based <- readRDS('py_based_integration_methods.rds')
+r_based <- readRDS('r_based_integration_methods.rds')
+```
+
+# Do Clutserisation, add assays with gene names istead od Ensembl IDs
+
+```{r include=FALSE}
+# Clusterize
+r_based_next <- list()
+# Loop through each Seurat object
+for (name in names(r_based)) {
+  my_data <- r_based[[name]]
+  DefaultAssay(my_data) <- 'integrated'
+  my_data <- FindNeighbors(my_data, reduction = "pca", dims = 1:30)
+  my_data <- FindClusters(my_data, resolution = c(0.3, 0.4, 0.5, 0.6))
+  
+  my_counts <- GetAssayData(object = my_data, assay = 'integrated', slot = 'data')
+  rownames(my_counts) <- gsub(pattern = '-0', replacement = '', x = rownames(my_counts))
+  rownames(my_counts) <- gsub(pattern = '-1-1', replacement = '', x = rownames(my_counts))
+  rownames(my_counts) %in% final_species_genes$`Pig Ensembl ID` %>% table()
+  rownames(my_counts)[!rownames(my_counts) %in% final_species_genes$`Pig Ensembl ID`]
+
+  my_counts <- my_counts[rownames(my_counts)[rownames(my_counts) %in% final_species_genes$`Pig Ensembl ID`],]
+
+  rownames(final_species_genes) <- final_species_genes$`Pig Ensembl ID`
+  df <- data.frame(pig_ens_data = rownames(my_counts), transl_human_gene = final_species_genes[rownames(my_counts), 'Human_gene_name_v98'], transl_hum_ens = final_species_genes[rownames(my_counts), 'Human Ensembl ID'])
+
+  rownames(df) <- df$pig_ens_data
+  rownames(my_counts) <- df[rownames(my_counts), 'transl_human_gene']
+
+  my_data[["integrated_genes"]] <- CreateAssayObject(data = my_counts)
+  
+  r_based_next[[name]] <- my_data
+}
+```
+
+```{r include=FALSE}
+py_based_next <- list()
+for(name in names(py_based)){
+  my_data <- py_based[[name]]
+  
+  my_counts <- GetAssayData(object = my_data, assay = 'RNA', slot = 'data')
+  # rownames(my_counts) <- gsub(pattern = '-0', replacement = '', x = rownames(my_counts))
+  rownames(my_counts) %in% final_species_genes$`Pig Ensembl ID` %>% table()
+  rownames(my_counts)[!rownames(my_counts) %in% final_species_genes$`Pig Ensembl ID`]
+
+  my_counts <- my_counts[rownames(my_counts)[rownames(my_counts) %in% final_species_genes$`Pig Ensembl ID`],]
+
+  rownames(final_species_genes) <- final_species_genes$`Pig Ensembl ID`
+  df <- data.frame(pig_ens_data = rownames(my_counts), transl_human_gene = final_species_genes[rownames(my_counts), 'Human_gene_name_v98'], transl_hum_ens = final_species_genes[rownames(my_counts), 'Human Ensembl ID'])
+
+  rownames(df) <- df$pig_ens_data
+  rownames(my_counts) <- df[rownames(my_counts), 'transl_human_gene']
+
+  my_data[["RNA_genes"]] <- CreateAssayObject(data = my_counts)
+  
+  # Cluster data
+    if(str_detect(string = name, pattern = 'scANVI')){
+      my_data <- RunUMAP(my_data, dims = 1:10, reduction = "X_scANVI", n.components = 2)
+    my_data <- FindNeighbors(my_data, dims = 1:10, reduction = "X_scANVI")
+    } else {
+      my_data <- RunUMAP(my_data, dims = 1:40, reduction = "X_scVI", n.components = 2)
+    my_data <- FindNeighbors(my_data, dims = 1:40, reduction = "X_scVI")
+    }
+  my_data <- FindClusters(my_data, resolution = c(0.3, 0.4, 0.5, 0.6))
+  py_based_next[[name]] <- my_data
+  
+    # Clean up memory
+  rm(my_counts, df)
+}
+```
+
+
+# Choose right clusterization - so all human clusters are distinguished in the integrated datasets. Clusters should be stable through bootsraping
+
+```{r}
+# finding the right clusterization for r_based methods: iterating through resolutions, by bootstrap identify stability of clusters
+# then keep only those resolutions that allow to identify more than 7 clusters (6 from human and 1 from others)
+my_k <- seq(0.1, 1, 0.1)
+df_stable_clusters <- data.frame(k = numeric(),
+                                 dataset = character(),
+                                 mean_ratio = numeric(),
+                                 n_clusters = numeric())
+n=1
+for(name in names(r_based_next)) {
+  for (j in my_k) {
+    set.seed(8899)
+    myClusterFUN <- function(x) {
+      g <- bluster::makeSNNGraph(x, type = "jaccard")
+      igraph::cluster_louvain(g, resolution = j)$membership
+    }
+    
+    my_data <- r_based_next[[name]]
+    DefaultAssay(my_data) <- 'integrated'
+    
+    pcs <- reducedDim(as.SingleCellExperiment(my_data), "PCA")
+    originals <- myClusterFUN(pcs)
+    df_stable_clusters[n, 'k'] <- j
+    df_stable_clusters[n, 'dataset'] <- name
+    
+    df_stable_clusters[n, 'mean_ratio'] <-
+      mean(diag(
+        bootstrapStability(pcs, FUN = myClusterFUN, clusters = originals, iterations = 20)
+      ))
+    df_stable_clusters[n, 'n_clusters'] <- length(unique(originals))
+    n <- n + 1
+  }
+}
+# py_based methods
+df_stable_clusters_2 <- data.frame(k = numeric(),
+                                 dataset = character(),
+                                 mean_ratio = numeric(),
+                                 n_clusters = numeric())
+n=1
+for(name in names(py_based_next)) {
+  for (j in my_k) {
+    set.seed(8899)
+    myClusterFUN <- function(x) {
+      g <- bluster::makeSNNGraph(x, type = "jaccard")
+      igraph::cluster_louvain(g, resolution = j)$membership
+    }
+    
+    my_data <- py_based_next[[name]]
+    DefaultAssay(my_data) <- 'RNA'
+    if(str_detect(string = name, pattern =  'scANVI')){
+      pcs <- reducedDim(as.SingleCellExperiment(my_data), "X_SCANVI")
+    } else  pcs <- reducedDim(as.SingleCellExperiment(my_data), "X_SCVI")
+    
+    originals <- myClusterFUN(pcs)
+    df_stable_clusters_2[n, 'k'] <- j
+    df_stable_clusters_2[n, 'dataset'] <- name
+    
+    df_stable_clusters_2[n, 'mean_ratio'] <-
+      mean(diag(
+        bootstrapStability(pcs, FUN = myClusterFUN, clusters = originals, iterations = 20)
+      ))
+    df_stable_clusters_2[n, 'n_clusters'] <- length(unique(originals))
+    n <- n + 1
+  }
+}
+df_stable_clusters_fin <- rbind(df_stable_clusters, df_stable_clusters_2)
+saveRDS(df_stable_clusters_fin, file = 'cluster_stability_bootstrap_res.rds')
+```
+
+
+```{r}
+df_stable_clusters_fin <- readRDS("~/THOR/diana/integration_pigs_with_WT/integrated_pig_mice_hum/closer/more_closer/SMC/after_bengal/cluster_specificity/cluster_stability_bootstrap_res.rds")
+df_stable_clusters_fin <- df_stable_clusters_fin[df_stable_clusters_fin$n_clusters > 7,]
+
+p <- ggplot(df_stable_clusters_fin, aes(x = factor(k), y = mean_ratio, group = dataset, color = dataset)) +
+  geom_line() +
+  geom_point() +  # Optional: Adds points to the line
+  labs(x = "Resolution", y = "Mean Ratio", color = "Dataset") +
+  theme_minimal()
+print(p)
+ggsave(filename = 'Cluster_stability_over_7.pdf', plot = p, width = 6,height = 4, units = 'cm', scale = 3)
+```
+
+# Clustering is done not by Seurat so that's why cluster numbers are not aligned to cluster size
+
+```{r}
+# Filter rows to keep only the maximum mean_ratio for each dataset
+df_max <- df_stable_clusters_fin %>%
+  group_by(dataset) %>%
+  filter(mean_ratio == max(mean_ratio))
+df_max <- as.data.frame(df_max)
+
+# Best resolution that gives more than 7 clusters for r_based
+
+for(i in seq_along(df_max$dataset[1:6])){
+  name <- df_max[i, 'dataset']
+  
+   set.seed(8899)
+   
+    myClusterFUN <- function(x) {
+      g <- bluster::makeSNNGraph(x, type = "jaccard")
+      igraph::cluster_louvain(g, resolution = df_max[i, 'k'])$membership
+    }
+    
+    
+    DefaultAssay(r_based_next[[name]]) <- 'integrated'
+    
+    pcs <- reducedDim(as.SingleCellExperiment(r_based_next[[name]]), "PCA")
+    originals <- myClusterFUN(pcs)
+    
+    r_based_next[[name]]$stab_clusters <- originals
+ 
+}
+
+# Best resolution that gives more than 7 clusters for py_based
+
+for(i in seq_along(df_max$dataset)[7:12]){
+  name <- df_max[i, 'dataset']
+  
+   set.seed(8899)
+   
+    myClusterFUN <- function(x) {
+      g <- bluster::makeSNNGraph(x, type = "jaccard")
+      igraph::cluster_louvain(g, resolution = df_max[i, 'k'])$membership
+    }
+    
+    
+    DefaultAssay(py_based_next[[name]]) <- 'RNA'
+    
+     if(str_detect(string = name, pattern =  'scANVI')){
+      pcs <- reducedDim(as.SingleCellExperiment(py_based_next[[name]]), "X_SCANVI")
+    } else  pcs <- reducedDim(as.SingleCellExperiment(py_based_next[[name]]), "X_SCVI")
+    
+    originals <- myClusterFUN(pcs)
+    
+    py_based_next[[name]]$stab_clusters <- originals
+ 
+}
+
+# Aggregate results for r_based and py_based methods and save
+
+all_datasets <- c(r_based_next, py_based_next)
+saveRDS(all_datasets, file = 'r_py_all_datasets_processed.rds')
+```
+
+# Name clusters (using majority for a cluster)
+(stability of clusters)
+
+```{r}
+# make new metadata variable 'smc_phenotypes_short'
+for (name in names(all_datasets)) {
+  Idents(all_datasets[[name]]) <- 'smc_phenotypes'
+  
+  new_names <-
+    c("Trans",
+      "SMC1", # called 'Contratile' in the paper's plots
+      "Term",
+      "PC",
+      "FB",
+      'SMC2', # Medial
+      'SMC3', # IFN_SMC
+      'DLX5',
+      'CRTAC1',
+      'SMC6') #  Contractile_Rgs5
+  names(new_names) <- levels(Idents(all_datasets[[name]]))
+  
+  all_datasets[[name]] <-
+    Seurat::RenameIdents(object = all_datasets[[name]], new_names)
+  new_names <- Idents(all_datasets[[name]])
+  all_datasets[[name]]$smc_phenotypes_short <-
+    new_names
+  
+  rm(new_names)
+}
+
+for (name in names(all_datasets)) {
+  my_table <-
+    table(all_datasets[[name]]$smc_phenotypes_short,
+          all_datasets[[name]]$stab_clusters)
+  
+  # Function to get the row name with the max value for each column
+  get_max_rowname <- function(column) {
+    max_index <- which.max(column)
+    rownames(my_table)[max_index]
+  }
+  
+  # Apply this function to each column of the table
+  max_rownames <- apply(my_table, 2, get_max_rowname)
+  # Get the cluster numbers as they appear in the table
+  cluster_numbers <- colnames(my_table)
+  
+  # Create a named vector where names are cluster numbers and values are the phenotypes
+  named_max_rownames <- setNames(max_rownames, cluster_numbers)
+  
+  # Create the 'specific_clusters' metadata variable
+  all_datasets[[name]]$specific_clusters <-
+    sapply(all_datasets[[name]]$stab_clusters, function(cluster) {
+      paste(cluster, paste('(', named_max_rownames[as.character(cluster)], ')', sep = ''), sep = " ")
+    })
+  
+}
+```
+
+# Plots
+
+```{r}
+text_sizes <- theme(axis.text.x=element_text(size=9,colour="black"),
+                      axis.text.y=element_text(size=9,colour="black"),
+                      axis.title.y=element_text(size=9,colour="black", margin = margin(t = 2, l = 1, r = 1, b =2, unit = "pt")),
+                      axis.title.x=element_text(size=9,colour="black", margin = margin(t = 1, l = 2, r = 2, b = 1, unit = "pt")),
+                      legend.text = element_text(size=9,colour="black"),
+                      legend.title = element_text(size=9,colour="black", margin = margin(t = 5, l = 0, r = 0, b = 5, unit = "pt")),
+                      legend.key = element_rect(colour="transparent", fill = "transparent"),
+                      strip.text.x = element_text(size=6,color = 'black',face="bold", angle=0),
+                      strip.text.y = element_text(size=6,color = 'black', face="bold", angle=0, vjust=0.5, hjust=0),
+                      axis.ticks= element_line(color = 'black', size=0.2),
+                      axis.line = element_line(colour = "gray50", size = 0.2, linetype = "solid"),
+                      plot.margin=unit(c(0,0,0,0),"pt"),
+                      plot.title=element_text(size=7, face='plain', colour="black"))
+
+
+common_minimal <- text_sizes + theme(
+        plot.background = element_rect(fill = NA,colour = NA),
+        strip.background = element_rect(fill = NA,colour = NA),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank()) + theme(
+    legend.spacing = unit(0.15, 'cm'), 
+    legend.key.size = unit(0.2, "cm"))
+
+
+# commonly used, x axis text 45 degree
+common_0x <- common_minimal + theme(axis.text.x = element_text(angle=0))
+
+# pal_species <- pal_npg("nrc", alpha = 0.7)(9)[c(1,4,3)]
+#   # MetBrewer::met.brewer(name = 'Thomas')[c(1,5,7)]
+# names(pal_species) <- c('sscrofa', 'hsapiens', 'mmusculus')
+# saveRDS(pal_species, file = 'pal_species.rds')
+# 
+# pal_celltypes <- c(pal_nejm(palette = 'default')(8)[-6], pal_jama(palette = 'default')(7) )
+#   # sample(c(MetBrewer::met.brewer(name = 'Thomas'), MetBrewer::met.brewer(name = 'Cross')))
+# saveRDS(pal_celltypes, file = 'pal_celltypes.rds')
+# 
+# show_col(pal_jama(palette = 'default')(9))
+```
+
+```{r}
+pal_celltypes <- readRDS("/faststorage/project/THOR/diana/integration_pigs_with_WT/integrated_pig_mice_hum/closer/more_closer/SMC/after_bengal/cluster_specificity/pal_celltypes.rds")
+pal_species <- readRDS("/faststorage/project/THOR/diana/integration_pigs_with_WT/integrated_pig_mice_hum/closer/more_closer/SMC/after_bengal/cluster_specificity/pal_species.rds")
+names(pal_species) <- c('pig', 'human', 'mouse')
+```
+
+
+__Stacked barplots for celltype composition in species for the stable named clusters__
+
+__First for the purpose of illustration, the contribution of species to the final dataset should be balanced. I will take 1500 cell from each species and exclude GFP and TDT mouse sorted cells__
+
+```{r}
+for (name in names(all_datasets)) {
+  all_datasets[[name]]$species_2 <- all_datasets[[name]]$species
+  all_datasets[[name]]$species[all_datasets[[name]]$species == 'hsapiens'] <-
+    'human'
+  all_datasets[[name]]$species[all_datasets[[name]]$species == 'mmusculus'] <-
+    'mouse'
+  all_datasets[[name]]$species[all_datasets[[name]]$species == 'sscrofa'] <-
+    'pig'
+}
+```
+
+
+```{r}
+
+# creating balanced datasets
+set.seed(8899)
+
+my_data <- all_datasets$many_higher_expr_seuratRPCA
+mice <-
+    my_data[, my_data$orig.ident %in% c('Klf4_WT_sorted_SMCs', 'SMC_WT_eYFP_sorted')]
+
+mouse_cells <- colnames( mice[, sample(colnames(mice), size = 1500, replace = F)])
+
+human_cells <- colnames( my_data[, sample(colnames(my_data[, my_data$species %in% c('human')]), size =
+                       1500, replace = F)] )
+
+pig_cells <- colnames(my_data[, sample(colnames(my_data[, my_data$species %in% c('pig')]), size =
+                       1500, replace = F)])
+
+
+# my_seu_balanced <- list()
+# for (name in names(all_datasets)) {
+#   my_data <- all_datasets[[name]]
+#   mice <-
+#     my_data[, my_data$orig.ident %in% c('Klf4_WT_sorted_SMCs', 'SMC_WT_eYFP_sorted')]
+#   mice <- mice[, sample(colnames(mice), size = 1500, replace = F)]
+#   human <-
+#     my_data[, sample(colnames(my_data[, my_data$species %in% c('human')]), size =
+#                        1500, replace = F)]
+#   pig <-
+#     my_data[, sample(colnames(my_data[, my_data$species %in% c('pig')]), size =
+#                        1500, replace = F)]
+#   
+#   balanced <-
+#     Merge_Seurat_List(list_seurat = list(mice, human, pig),
+#                       merge.data = T)
+#   my_seu_balanced[[name]] <- balanced
+#   rm(mice, human, pig, balanced)
+# }
+
+my_seu_balanced <- list()
+for (name in names(all_datasets)) {
+  my_data <- all_datasets[[name]]
+  # mice <-
+  #   my_data[, my_data$orig.ident %in% c('Klf4_WT_sorted_SMCs', 'SMC_WT_eYFP_sorted')]
+  mice <- my_data[, mouse_cells]
+  human <-
+    my_data[, human_cells]
+  pig <-
+    my_data[, pig_cells]
+  
+  balanced <- merge(mice, y = c(human, pig))
+  
+    # Merge_Seurat_List(list_seurat = list(mice, human, pig),
+    #                   merge.data = T)
+  my_seu_balanced[[name]] <- balanced
+  rm(mice, human, pig, balanced)
+}
+
+```
+
+```{r}
+new_names <- c("HE_CCA","HE_RPCA","HHC_CCA",  "HHC_RPCA","O2O_CCA", "O2O_RPCA", "HE_scANVI","HE_scVI",   "HHC_scANVI" ,    "HHC_scVI", "O2O_scANVI"  ,"O2O_scVI" )
+names(new_names) <- names(all_datasets)
+
+new_names <- new_names[c(2,4,6,
+                         1,3,5,
+                         7,9,11,
+                         8,10,12)]
+```
+
+
+```{r}
+cluster_prop <- list()
+for (name in names(new_names)) {
+  balanced <- my_seu_balanced[[name]]
+  # res <- colnames(balanced@meta.data)[grep(pattern = '0.6', x = colnames(balanced@meta.data))]
+  # contribution
+  df <-
+    as.data.frame.array(table(balanced@meta.data[, 'specific_clusters'], balanced$species))
+  df$sum <- rowSums(df)
+  df$pct_sum <- round(df$sum / sum(df$sum) * 100, 1)
+  
+  #  creating a table with proportions
+  # Assuming df is your original dataframe
+  df_prop <- df
+  
+  # Calculate proportions for each column except 'sum'
+  df_prop$human <- df$human / df$sum
+  df_prop$mouse <- df$mouse / df$sum
+  df_prop$pig <- df$pig / df$sum
+  
+  # The 'sum' column remains unchanged or can be removed if not needed
+  df_prop$sum <- NULL  # Uncomment to remove the 'sum' column
+  
+  # View the new dataframe with proportions
+  df_prop[, 1:3] <- df_prop[, 1:3] * 100
+  df_prop$cluster <- rownames(df_prop)
+  # df_prop$cluster <- as.numeric(df_prop$cluster)
+  df_prop <- df_prop[order(x = df_prop$pct_sum, decreasing = F), ]
+  
+  
+  # Transform data to long format
+  df_long <- gather(df_prop, species, percent,-cluster,-pct_sum)
+  
+  
+  
+  # Calculate cumulative proportions for text placement correctly within each cluster
+  df_long <- df_long %>%
+    group_by(cluster) %>%
+    mutate(cumulative = 100 - (cumsum(percent) - percent / 2))
+  
+  df_long$cluster <-
+    factor(df_long$cluster, levels = unique(df_long$cluster))
+  
+  # p1 <-
+  #   ggplot(df_long, aes(x = cluster, y = percent, fill = species)) +
+  #   geom_bar(
+  #     # aes(width = rescale(pct_sum, c(0.1, 1))),
+  #     stat = "identity", position = "stack") +
+  #   geom_text(aes(label = ifelse(percent >= 5, round(percent, 1), ""),
+  #                 y = cumulative),
+  #             size = 3) +
+  #   geom_text(aes(label = pct_sum), y = 108) +
+  #   scale_y_continuous(limits = c(0, 110)) +
+  #   scale_fill_manual(values = pal_species) +
+  #   theme_bw() +
+  #   ggtitle(new_names[name]) +
+  #   coord_flip()
+  #   # rotate_x_text(angle = 45)
+  
+  p1 <-
+    ggplot(df_long, aes(x = cluster, y = percent, fill = species)) +
+    geom_bar(stat = "identity", position = "stack") +
+    geom_text(aes(label = ifelse(percent >= 5, round(percent, 1), ""),
+                  y = cumulative),
+              size = 3,
+              family = "Helvetica") +
+    geom_text(aes(label = pct_sum), y = 108, family = "Helvetica") +
+    scale_y_continuous(limits = c(0, 110)) +
+    scale_fill_manual(values = pal_species) +
+    theme_bw() +
+    ggtitle(new_names[name]) +
+    coord_flip() +
+    theme(
+      text = element_text(family = "Helvetica"),
+      # Set global text family to Arial
+      plot.title = element_text(family = "Helvetica"),
+      # Ensure title is also Arial
+      axis.text = element_text(family = "Helvetica"),
+      # Axis texts
+      axis.title = element_text(family = "Helvetica")
+    )  # Axis titles
+  
+  
+  cluster_prop[[name]] <- p1
+}
+saveRDS(cluster_prop, file = 'cluster_proportions_list_plots.rds')
+n <- length(cluster_prop)
+nCol <- floor(sqrt(n))
+
+p1 <- do.call("grid.arrange", c(cluster_prop, ncol = nCol))
+
+# p1 <- plot_grid(plotlist = cluster_prop, nrow = 3, ncol = 4, align = 'hv',  axis = 'b', greedy = T, label_fontfamily = 'Helvetica', label_x = -0.1)
+# 
+# ggsave(filename = 'proportions_stable_cluster.pdf',  plot = p, device = 'pdf', units = 'cm', dpi = 400, width = 16, height = 14, scale = 2.5)
+
+```
+
+
+```{r}
+pdf(file = 'proportions_stable_cluster.pdf', width = 16, height = 14, family = 'Helvetica')
+plot(p1)
+dev.off()
+```
+
+
+__UMAPs with the stable clusters + species__
+
+
+```{r}
+# for purpose of visualisation, subset human part to 2500 cells randomly
+
+myplots <- list()
+
+
+for(name in names(new_names)) {
+  my_vec <- sample(names(all_datasets[[name]]$species[all_datasets[[name]]$species == 'human']), size = 2500, replace = F) 
+  my_species = DimPlot(
+  object = all_datasets[[name]][,all_datasets[[name]]$species %in% c('pig', 'mouse')| colnames(all_datasets[[name]]) %in% my_vec],
+    reduction = 'umap',
+    group.by = c('species'),
+    pt.size = 0.5,
+    shuffle = TRUE
+  ) + theme(legend.position = 'none') + text_sizes + theme(plot.title = element_blank()) + 
+  #    plot_annotation(title =  new_names[name]) +  
+  # theme(text = element_text(size = 10)) +
+    scale_color_manual(values = pal_species) + theme(
+      axis.line = element_blank(),
+      axis.text.y = element_blank(),
+      axis.ticks = element_blank(),
+      axis.text.x = element_blank(),
+      axis.title.x = element_blank(),
+      axis.title.y = element_blank()
+    )
+  
+  
+  my_cell_type = DimPlot_scCustom(seurat_object = all_datasets[[name]][,all_datasets[[name]]$species %in% c('pig', 'mouse')| colnames(all_datasets[[name]]) %in% my_vec],
+    reduction = 'umap',
+    group.by = 'specific_clusters',
+    pt.size = 0.5,
+    shuffle = TRUE, label = T, label.box = T, colors_use = pal_celltypes, repel = T, label.size = 2.3
+  ) + NoLegend()+
+    # guides(color = guide_legend(nrow = 6)) +
+    # theme(legend.position = 'none', legend.text = element_text(size = 9)) +  
+    theme(plot.title = element_blank()) + 
+    scale_color_manual(values = pal_celltypes) +
+    theme(
+      axis.line = element_blank(),
+      axis.text.y = element_blank(),
+      axis.ticks = element_blank(),
+      axis.text.x = element_blank(),
+      axis.title.x = element_blank(),
+      axis.title.y = element_blank()
+    )
+  
+  
+  
+fig = ggdraw() +
+  draw_plot(my_species, x = 0.0, y = .54, width = .99, height = .45) +
+  draw_plot(my_cell_type, x = 0.0, y = 0.00005, width = .99, height = .55)  +
+  draw_plot_label(label = new_names[name], size = 12,
+                  x = c(0), y = c(1.005), family = 'Helvetica')
+
+  
+  # fig = plot_grid(my_species,
+  #                 my_cell_type,
+  #                 ncol = 1, rel_widths = c(0.5, 1),
+  #                 rel_heights  = c(0.5, 1))
+  
+  myplots[[name]] <- fig
+  
+}
+
+saveRDS(myplots, 'succesful_integration_specific_clusters_species.rds')
+
+# library(gridExtra)
+# 
+# do.call("grid.arrange", c(myplots[c(1,2)], ncol=2))
+```
+
+
+```{r}
+
+# p <- print(plot_grid(myplots[1][[1]], myplots[2][[1]], myplots[3][[1]], myplots[4][[1]], myplots[5][[1]], myplots[6][[1]], 
+#                 myplots[7][[1]], myplots[8][[1]], myplots[9][[1]], myplots[10][[1]], myplots[11][[1]], myplots[12][[1]]
+#                 , ncol = 6, axis = 'lb'))
+
+p <- plot_grid(plotlist = myplots, nrow = 2, ncol = 6, align = 'hv',  axis = 'b', greedy = T, label_fontfamily = 'Helvetica', label_x = -0.1)
+
+ggsave(filename = 'UMAP_succesful_integration_specific_clusters_species.pdf',  plot = p, device = 'pdf', units = 'cm', dpi = 400, width = 16, height = 14, scale = 2)
+
+# save_plot(filename = 'test.pdf',  plot = p, ncol = 6, nrow = 4, )
+
+```
+
+# To find consistent species-specific and shared clusters, we assumed that a cluster is species-specific if: either one species contributes more than 75% of its composition, or one species contributes less than 10% of a cluster composition. In contrast, a clusters was considered as shared if all species contribute to it from 10.1 to 74.9%. 
+
+Here I also introduce a limitation for a size of clusters - it is worth considering only big enough clusters, let's say that their contribution should be more than 2 percent out of all integrated dataset cells.
+
+Therefore, here we work with balanced datasets, where each species contribute 1500 cells. The total number of cells is 4500, and the threshold is 49 cells (3.2% out of 1500 cells)
+
+```{r}
+# Adjusted function to categorize each cluster
+categorize_cluster <- function(human, mouse, pig) {
+  contributions <- c(human = human, mouse = mouse, pig = pig)
+  high_contributions <- contributions > 80
+  low_contributions <- contributions < 10
+  
+  if (sum(high_contributions) == 1) {
+    # Single species contributes more than 80%
+    return(paste(names(contributions)[high_contributions], "specific", sep = "-"))
+  } else if (all(contributions >= 10.1 & contributions <= 79.9)) {
+    # All species contribute between 11% and 79%
+    return("shared")
+  } else if (sum(low_contributions) == 1) {
+    # Exactly one species contributes less than 10%, making the cluster specific for the other two species
+    # Filter out the species with less than 10% contribution
+    specific_species <- names(contributions)[!low_contributions]
+    # Create a label indicating the cluster is specific to the remaining species
+    specific_label <- paste(specific_species, collapse = "-")
+    return(paste0(specific_label, "-specific"))
+  } else {
+    return("mixed")
+  }
+}
+
+my_spec_clusters <- data.frame(
+  Method = character(),
+  Mouse_specific = character(),
+  Human_specific = character(),
+  Pig_specific = character(),
+  Mouse_pig_specific = character(),
+  Mouse_human_specific = character(),
+  Human_pig_specific = character(),
+  Shared = character(),
+  Too_small_cluster = character()
+)
+
+for (name in names(new_names)) {
+  balanced <- my_seu_balanced[[name]]
+  # res <- colnames(balanced@meta.data)[grep(pattern = '0.6', x = colnames(balanced@meta.data))]
+  # contribution
+  df <-
+    as.data.frame.array(table(balanced@meta.data[, 'specific_clusters'], balanced$species))
+  df$sum <- rowSums(df)
+  df$pct_sum <- round(df$sum / sum(df$sum) * 100, 1)
+  
+  #  creating a table with proportions
+  # Assuming df is your original dataframe
+  df_prop <- df
+  
+  # Calculate proportions for each column except 'sum'
+  df_prop$human <- df$human / df$sum
+  df_prop$mouse <- df$mouse / df$sum
+  df_prop$pig <- df$pig / df$sum
+  
+  # The 'sum' column remains unchanged or can be removed if not needed
+  # df_prop$sum <- NULL  # Uncomment to remove the 'sum' column
+  
+  # View the new dataframe with proportions
+  df_prop[, 1:3] <- df_prop[, 1:3] * 100
+  df_prop$cluster <- rownames(df_prop)
+  # df_prop$cluster <- as.numeric(df_prop$cluster)
+  df_prop <- df_prop[order(x = df_prop$pct_sum, decreasing = T), ]
+  df_prop$Big <- df_prop$sum > 49
+  
+  # # filter out small clusters, that are less than 0.6%
+  #  df_prop <- df_prop[df_prop$sum > 49,]
+  
+  df_prop$category <- apply(df_prop[, c("human", "mouse", "pig")], 1, function(x) categorize_cluster(x['human'], x['mouse'], x['pig']))
+  
+  df_prop$category <- gsub(pattern = 'human.human', replacement = 'human', x = df_prop$category)
+  df_prop$category <- gsub(pattern = 'pig.pig', replacement = 'pig', x = df_prop$category)
+  df_prop$category <- gsub(pattern = 'mouse.mouse', replacement = 'mouse', x = df_prop$category)
+  
+  my_spec_clusters[name, 'Method'] <-  new_names[name]
+  
+  my_spec_clusters[name, 'Mouse_specific'] <- paste(c(unlist(df_prop[df_prop$category == 'mouse-specific' & df_prop$Big == TRUE, 'cluster'])), collapse = ', ')
+  my_spec_clusters[name, 'Human_specific'] <- paste(c(unlist(df_prop[df_prop$category == 'human-specific'& df_prop$Big == TRUE, 'cluster'])), collapse = ', ')
+  my_spec_clusters[name, 'Pig_specific'] <- paste(c(unlist(df_prop[df_prop$category == 'pig-specific'& df_prop$Big == TRUE, 'cluster'])), collapse = ' ')
+  
+  my_spec_clusters[name, 'Mouse_pig_specific'] <- paste(c(unlist(df_prop[df_prop$category == 'mouse-pig-specific'& df_prop$Big == TRUE, 'cluster'])), collapse = ', ')
+  my_spec_clusters[name, 'Mouse_human_specific'] <- paste(c(unlist(df_prop[df_prop$category == 'human-mouse-specific'& df_prop$Big == TRUE, 'cluster'])), collapse = ', ')
+  my_spec_clusters[name, 'Human_pig_specific'] <- paste(c(unlist(df_prop[df_prop$category == 'human-pig-specific'& df_prop$Big == TRUE, 'cluster'])), collapse = ', ')
+  
+  my_spec_clusters[name, 'Shared'] <- paste(c(unlist(df_prop[df_prop$category == 'shared'& df_prop$Big == TRUE, 'cluster'])), collapse = ', ')
+  
+  my_spec_clusters[name, 'Too_small_cluster'] <- paste(c(unlist(df_prop[df_prop$Big == FALSE, 'cluster'])), collapse = ', ')
+
+}
+
+saveRDS(my_spec_clusters, file = 'specific_clusters_df.rds')
+
+print(my_spec_clusters)
+```
+
+```{r}
+set.seed(8899)
+# pal_cat <- sample(pal_jco(palette = 'default')(8))
+# saveRDS(pal_cat, file = 'pal_cat.rds')
+pal_cat <- readRDS("/faststorage/project/THOR/diana/integration_pigs_with_WT/integrated_pig_mice_hum/closer/more_closer/SMC/after_bengal/cluster_specificity/pal_cat.rds")
+pal_celltypes_all <- c("#0072B5FF",  "#79AF97FF",  "#374E55FF","#80796BFF", "#FFDC91FF","#EE4C97FF", "#7876B1FF","#20854EFF", "#BC3C29FF",  "#E18727FF")
+```
+
+
+```{r}
+names(pal_cat) <- c('shared','too_small',  'human-pig-specific','human-specific','human-mouse-specific' , 'mouse-specific',   'pig-specific', 'mouse-pig-specific' )
+myplots <- list()
+my_prop <- list()
+for (name in names(new_names)) {
+  my_data <- my_seu_balanced[[name]]
+  # res <- colnames(balanced@meta.data)[grep(pattern = '0.6', x = colnames(balanced@meta.data))]
+  # contribution
+  df <-
+    as.data.frame.array(table(my_data@meta.data[, 'specific_clusters'], my_data$species))
+  df$sum <- rowSums(df)
+  df$pct_sum <- round(df$sum / sum(df$sum) * 100, 1)
+  
+  #  creating a table with proportions
+  # Assuming df is your original dataframe
+  df_prop <- df
+  
+  # Calculate proportions for each column except 'sum'
+  df_prop$human <- df$human / df$sum
+  df_prop$mouse <- df$mouse / df$sum
+  df_prop$pig <- df$pig / df$sum
+  
+  # The 'sum' column remains unchanged or can be removed if not needed
+  # df_prop$sum <- NULL  # Uncomment to remove the 'sum' column
+  
+  # View the new dataframe with proportions
+  df_prop[, 1:3] <- df_prop[, 1:3] * 100
+  df_prop$cluster <- rownames(df_prop)
+  # df_prop$cluster <- as.numeric(df_prop$cluster)
+  df_prop <- df_prop[order(x = df_prop$pct_sum, decreasing = T), ]
+  # # filter out small clusters, that are less than 0.6%
+  df_prop$Big <- df_prop$sum > 49
+  
+  #  df_prop <- df_prop[df_prop$sum > 49,]
+  
+  df_prop$category <- apply(df_prop[, c("human", "mouse", "pig")], 1, function(x) categorize_cluster(x['human'], x['mouse'], x['pig']))
+  
+  df_prop$category <- gsub(pattern = 'human.human', replacement = 'human', x = df_prop$category)
+  df_prop$category <- gsub(pattern = 'pig.pig', replacement = 'pig', x = df_prop$category)
+  df_prop$category <- gsub(pattern = 'mouse.mouse', replacement = 'mouse', x = df_prop$category) 
+  my_prop[[name]] <- df_prop
+  
+  df_prop[df_prop$Big == FALSE, 'category'] <- 'too_small'
+  my_vec <- df_prop$category
+  names(my_vec) <- df_prop$cluster
+  
+  my_data <- all_datasets[[name]]
+  Idents(my_data) <- 'specific_clusters'
+  my_data$specific_clusters <- factor(my_data$specific_clusters)
+  
+  my_data$specific_clusters_2 <- my_data$specific_clusters
+    
+  non_pres <- levels(my_data$specific_clusters)[!levels(my_data$specific_clusters) %in% names(my_vec)]  
+  
+  my_data$specific_clusters_2[my_data$specific_clusters_2 %in% non_pres] <- NA
+  
+  Idents(my_data) <- 'specific_clusters_2'
+  
+  my_data <- RenameIdents(my_data, my_vec)
+  my_vec_2 <- Idents(my_data)
+  my_data$specificity_category <- my_vec_2
+  
+  all_datasets[[name]]$specificity_category <- my_vec_2
+  
+  my_data$smc_phenotypes <- factor(my_data$smc_phenotypes)
+  
+  my_species = DimPlot_scCustom(
+  my_data[,!is.na(my_data$specificity_category)],
+    reduction = 'umap',
+    group.by = c('specificity_category'),
+    pt.size = 0.5,
+    shuffle = TRUE, label = T, label.box = T,  colors_use = pal_cat, repel = T, label.size = 2.7
+  ) + 
+    scale_color_manual(values = pal_cat) +
+    theme(legend.position = 'none') +
+   text_sizes + theme(plot.title = element_blank()) + 
+    # guides(color = guide_legend(nrow = 3)) +
+  #    plot_annotation(title =  new_names[name]) +  
+  # theme(text = element_text(size = 10)) +
+    scale_color_manual(values = pal_cat) + theme(
+      axis.line = element_blank(),
+      axis.text.y = element_blank(),
+      axis.ticks = element_blank(),
+      axis.text.x = element_blank(),
+      axis.title.x = element_blank(),
+      axis.title.y = element_blank()
+    )
+  
+  
+  my_cell_type = DimPlot_scCustom(my_data,
+    reduction = 'umap',
+    group.by = 'smc_phenotypes',
+    pt.size = 0.5,
+    shuffle = TRUE, label = T, label.box = T, colors_use = pal_celltypes_all, repel = T, label.size = 2.7
+  ) + NoLegend()+
+    # guides(color = guide_legend(nrow = 6)) +
+    # theme(legend.position = 'none', legend.text = element_text(size = 9)) +  
+    theme(plot.title = element_blank()) + 
+    scale_color_manual(values = pal_celltypes_all) +
+    theme(
+      axis.line = element_blank(),
+      axis.text.y = element_blank(),
+      axis.ticks = element_blank(),
+      axis.text.x = element_blank(),
+      axis.title.x = element_blank(),
+      axis.title.y = element_blank()
+    )
+  
+# fig = ggdraw() +
+#   draw_plot(my_cell_type, x = 0.0, y = .5001, width = .6, height = .55) +
+#   draw_plot(my_species , x = 0.0, y = 0.00005, width = .6, height = .55)  +
+#   draw_plot_label(label = new_names[name], size = 12,
+#                   x = c(-0.01), y = c(1.005), family = 'Helvetica')
+fig = ggdraw() +
+  draw_plot(my_cell_type, x = 0.0, y = .54, width = .99, height = .45) +
+  draw_plot(my_species, x = 0.0, y = 0.00005, width = .99, height = .55)  +
+  draw_plot_label(label = new_names[name], size = 12,
+                  x = c(0), y = c(1.005), family = 'Helvetica')
+
+
+  
+  # fig = plot_grid(my_species,
+  #                 my_cell_type,
+  #                 ncol = 1, rel_widths = c(0.5, 1),
+  #                 rel_heights  = c(0.5, 1))
+  
+  myplots[[name]] <- fig
+  
+}
+
+saveRDS(myplots, file = 'species_specific_clusters_category.rds')
+saveRDS(my_prop, file = 'species_specific_clusters_categoryproportions_df.rds')
+p <- plot_grid(plotlist = myplots, nrow = 2, ncol = 6, align = 'hv',  axis = 'b', greedy = T, label_fontfamily = 'Arial', label_x = -0.1)
+
+ggsave(filename = 'UMAP_specific_clusters_species_categories.pdf',  plot = p, device = 'pdf', units = 'cm', dpi = 400, width = 16, height = 14, scale = 3)
+
+```
+
+# Compute mean and sd for composition of shared and specific clusters
+```{r}
+my_prop <- readRDS("~/THOR/diana/integration_pigs_with_WT/integrated_pig_mice_hum/closer/more_closer/SMC/after_bengal/cluster_specificity/species_specific_clusters_categoryproportions_df.rds")
+ 
+
+
+# For each data frame, sum pct_sum where category == "shared"
+sums_each_df <- sapply(my_prop, function(df) {
+  df %>% filter(sum > 50) %>% 
+    filter(category == "shared") %>%
+    summarise(sum_pct = sum(pct_sum, na.rm = TRUE)) %>%
+    pull(sum_pct)
+})
+
+#  Now sums_each_df is a numeric vector (one sum per data frame)
+# Calculate mean and sd of those sums across the data frames
+mean_sums <- mean(sums_each_df, na.rm = TRUE)
+sd_sums   <- sd(sums_each_df, na.rm = TRUE)
+cat("Mean of sums for shared category:", mean_sums, "\n") # 75.575
+cat("SD of sums for shared category:  ", sd_sums,   "\n") # 20.13956 
+
+
+median_sums <- median(sums_each_df, na.rm = TRUE)
+IQR_value <- IQR(sums_each_df, na.rm = TRUE, type = 7)
+Q1 <- quantile(sums_each_df, 0.25)  # 25th percentile (1st quartile)
+Q3 <- quantile(sums_each_df, 0.75)  # 75th percentile (3rd quartile)
+
+cat("Median: ", median_sums, "\n") # 77.05 
+cat("1st Quartile (Q1): ", Q1, "\n") # 65
+cat("3rd Quartile (Q3): ", Q3, "\n") # 89.825
+cat("Interquartile Range (IQR): ", IQR_value, "\n") # 24.825
+
+
+# Mouse-specific 'Terminal'
+# For each data frame, sum pct_sum where category == "shared"
+sums_each_df <- sapply(my_prop, function(df) {
+  df %>% 
+    filter(sum > 50) %>% 
+    filter(category == "mouse-specific") %>%
+    summarise(mouse = sum(mouse, na.rm = TRUE)) %>%
+    pull(mouse)
+})
+
+#  Now sums_each_df is a numeric vector (one sum per data frame)
+# Calculate mean and sd of those sums across the data frames
+mean_sums <- mean(sums_each_df[sums_each_df != 0][-3], na.rm = TRUE)
+sd_sums   <- sd(sums_each_df[sums_each_df != 0][-3], na.rm = TRUE)
+
+cat("Mean of sums for the category:", mean_sums, "\n") # 90.98468 
+cat("SD of sums for the category:  ", sd_sums,   "\n") #  7.291969 
+
+median_sums <- median(sums_each_df[sums_each_df != 0][-3], na.rm = TRUE)
+IQR_value <- IQR(sums_each_df[sums_each_df != 0][-3], na.rm = TRUE, type = 7)
+Q1 <- quantile(sums_each_df[sums_each_df != 0][-3], 0.25)  # 25th percentile (1st quartile)
+Q3 <- quantile(sums_each_df[sums_each_df != 0][-3], 0.75)  # 75th percentile (3rd quartile)
+
+cat("Median: ", median_sums, "\n") # 92.3445 
+cat("1st Quartile (Q1): ", Q1, "\n") # 84.03756
+cat("3rd Quartile (Q3): ", Q3, "\n") # 97.67442
+cat("Interquartile Range (IQR): ", IQR_value, "\n") # 13.63686
+
+# # Human-pig-specific contractile
+# # For each data frame, sum pct_sum where category == "shared"
+# sums_each_df <- sapply(my_prop, function(df) {
+#   df %>% 
+#     filter(sum > 50) %>% 
+#     filter(category == "human-pig-specific") %>%
+#     filter(grepl( 'SMC', cluster)) %>%
+#     summarise(mouse = sum(mouse, na.rm = TRUE)) %>%
+#     pull(mouse)
+# })
+# 
+# #  Now sums_each_df is a numeric vector (one sum per data frame)
+# # Calculate mean and sd of those sums across the data frames
+# mean_sums <- mean(sums_each_df, na.rm = TRUE)
+# sd_sums   <- sd(sums_each_df, na.rm = TRUE)
+# 
+# cat("Mean of sums for the category:", mean_sums, "\n") #  10.09659
+# cat("SD of sums for the category:  ", sd_sums,   "\n") # 5.57072
+
+# DLX5
+# For each data frame, sum pct_sum where category == "shared"
+sums_each_df <- sapply(my_prop, function(df) {
+  df %>% 
+    filter(sum > 50) %>% 
+    # filter(category == "human-pig-specific") %>%
+    filter(grepl('DLX5', cluster)) %>%
+    summarise(sum_pct = sum(pct_sum, na.rm = TRUE)) %>% 
+    pull(sum_pct)
+})
+
+#  Now sums_each_df is a numeric vector (one sum per data frame)
+# Calculate mean and sd of those sums across the data frames
+mean_sums <- mean(sums_each_df, na.rm = TRUE)
+sd_sums   <- sd(sums_each_df, na.rm = TRUE)
+
+cat("Mean of sums for the category:", mean_sums, "\n") #  3.191667
+cat("SD of sums for the category:  ", sd_sums,   "\n") # 1.440618 
+
+
+
+sums_each_df <- sapply(my_prop, function(df) {
+  df %>% 
+    filter(sum > 50) %>% 
+    # filter(category == "human-pig-specific") %>%
+    filter(grepl( 'DLX5', cluster)) %>%
+    summarise(human = sum(human, na.rm = TRUE)) %>%
+    pull(human)
+})
+
+#  Now sums_each_df is a numeric vector (one sum per data frame)
+# Calculate mean and sd of those sums across the data frames
+mean_sums <- mean(sums_each_df[sums_each_df != 0], na.rm = TRUE)
+sd_sums   <- sd(sums_each_df[sums_each_df != 0], na.rm = TRUE)
+
+cat("Mean of sums for the category:", mean_sums, "\n") #  91.31739
+cat("SD of sums for the category:  ", sd_sums,   "\n") #  10.43497
+
+median_sums <- median(sums_each_df[sums_each_df != 0], na.rm = TRUE)
+IQR_value <- IQR(sums_each_df[sums_each_df != 0], na.rm = TRUE, type = 7)
+Q1 <- quantile(sums_each_df[sums_each_df != 0], 0.25)  # 25th percentile (1st quartile)
+Q3 <- quantile(sums_each_df[sums_each_df != 0], 0.75)  # 75th percentile (3rd quartile)
+
+cat("Median: ", median_sums, "\n") # 95.94595 
+cat("1st Quartile (Q1): ", Q1, "\n") # 83.62283
+cat("3rd Quartile (Q3): ", Q3, "\n") # 99.6988 
+cat("Interquartile Range (IQR): ", IQR_value, "\n") # 16.07597
+
+# Pericytes
+sums_each_df <- sapply(my_prop, function(df) {
+  df %>% 
+    filter(sum > 50) %>% 
+    # filter(category == "human-pig-specific") %>%
+    filter(grepl( 'PC', cluster)) %>%
+    summarise(human = sum(human, na.rm = TRUE)) %>%
+    pull(human)
+})
+
+sums_each_df_2 <- sapply(my_prop, function(df) {
+  df %>% 
+    filter(sum > 50) %>% 
+    # filter(category == "human-pig-specific") %>%
+    filter(grepl( 'PC', cluster)) %>%
+    summarise(pig = sum(pig, na.rm = TRUE)) %>%
+    pull(pig)
+})
+
+sums_each_df <- sums_each_df + sums_each_df_2
+#  Now sums_each_df is a numeric vector (one sum per data frame)
+# Calculate mean and sd of those sums across the data frames
+mean_sums <- mean(sums_each_df[sums_each_df != 0], na.rm = TRUE)
+sd_sums   <- sd(sums_each_df[sums_each_df != 0], na.rm = TRUE)
+
+cat("Mean of sums for the category:", mean_sums, "\n") #  96.65557 
+cat("SD of sums for the category:  ", sd_sums,   "\n") #  4.560509
+
+median_sums <- median(sums_each_df[sums_each_df != 0], na.rm = TRUE)
+IQR_value <- IQR(sums_each_df[sums_each_df != 0], na.rm = TRUE, type = 7)
+Q1 <- quantile(sums_each_df[sums_each_df != 0], 0.25)  # 25th percentile (1st quartile)
+Q3 <- quantile(sums_each_df[sums_each_df != 0], 0.75)  # 75th percentile (3rd quartile)
+
+cat("Median: ", median_sums, "\n") # 99.02624 
+cat("1st Quartile (Q1): ", Q1, "\n") # 94.88636
+cat("3rd Quartile (Q3): ", Q3, "\n") # 100
+cat("Interquartile Range (IQR): ", IQR_value, "\n") # 5.113636
+
+
+
+# Contractile pig-human-enriched
+for (i in names(my_prop)) {
+  my_prop[[i]]$pig_human <- my_prop[[i]]$human + my_prop[[i]]$pig
+}
+
+
+sums_each_df <- sapply(my_prop, function(df) {
+  df %>% 
+    filter(sum > 50) %>% 
+    filter(pig_human > 90) %>% 
+    # filter(category == "human-pig-specific") %>%
+    filter(grepl( 'SMC1', cluster)) %>%
+    summarise(pig_human = mean(pig_human, na.rm = TRUE)) %>%
+    pull(pig_human)
+})
+
+# sums_each_df_2 <- sapply(my_prop, function(df) {
+#   df %>% 
+#     filter(sum > 50) %>% 
+#     # filter(category == "human-pig-specific") %>%
+#     filter(grepl( 'SMC1', cluster)) %>%
+#     summarise(pig = sum(pig, na.rm = TRUE)) %>%
+#     pull(pig)
+# })
+
+# sums_each_df <- sums_each_df + sums_each_df_2
+#  Now sums_each_df is a numeric vector (one sum per data frame)
+# Calculate mean and sd of those sums across the data frames
+mean_sums <- mean(sums_each_df[sums_each_df != 0], na.rm = TRUE)
+sd_sums   <- sd(sums_each_df[sums_each_df != 0], na.rm = TRUE)
+
+cat("Mean of sums for the category:", mean_sums, "\n") #  94.17904
+cat("SD of sums for the category:  ", sd_sums,   "\n") #  0.244814 
+
+
+median_sums <- median(sums_each_df[sums_each_df != 0], na.rm = TRUE)
+IQR_value <- IQR(sums_each_df[sums_each_df != 0], na.rm = TRUE, type = 7)
+Q1 <- quantile(sums_each_df[sums_each_df != 0], 0.25)  # 25th percentile (1st quartile)
+Q3 <- quantile(sums_each_df[sums_each_df != 0], 0.75)  # 75th percentile (3rd quartile)
+
+cat("Median: ", median_sums, "\n") # 94.13562 
+cat("1st Quartile (Q1): ", Q1, "\n") # 94.88636
+cat("3rd Quartile (Q3): ", Q3, "\n") # 100
+cat("Interquartile Range (IQR): ", IQR_value, "\n") # 0.2609978
+```
+
+
+```{r}
+new_names <- c("HE_CCA","HE_RPCA","HHC_CCA",  "HHC_RPCA","O2O_CCA", "O2O_RPCA", "HE_scANVI","HE_scVI",   "HHC_scANVI" ,    "HHC_scVI", "O2O_scANVI"  ,"O2O_scVI" )
+names(new_names) <- names(all_datasets)
+
+new_names <- new_names[c(2,4,6,
+                         1,3,5,
+                         7,9,11,
+                         8,10,12)]
+
+specific_clusters_df <- readRDS("~/THOR/diana/integration_pigs_with_WT/integrated_pig_mice_hum/closer/more_closer/SMC/after_bengal/cluster_specificity/specific_clusters_df.rds")
+
+my_data <- all_datasets$many_higher_expr_seuratRPCA
+
+my_vec <- c(rep(NA, length(colnames(my_data))))
+names(my_vec) <- colnames(my_data)
+```
+
+```{r}
+### 1) Precompute cluster membership sets
+
+# Let's say we build a list to store membership for each (name, k):
+# E.g.: membership_list[[name]][[k]] = character vector of cell names
+membership_list <- list()
+
+for (name in names(new_names)) {
+  membership_list[[name]] <- list()
+  for (k in colnames(specific_clusters_df)[-1]) {
+    # gather all cell names that are in specific_clusters_df[name, k]
+    target_cluster <- strsplit(specific_clusters_df[name, k], ", ")[[1]]
+    # subset the $specific_clusters from all_datasets[[name]]
+    # fetch the names of those cells
+    # We can store as a character vector
+    membership_list[[name]][[k]] <-
+      names(all_datasets[[name]]$specific_clusters[
+        all_datasets[[name]]$specific_clusters %in% target_cluster
+      ])
+  }
+}
+
+### 2) For each k, combine membership across 'names' if that’s needed
+# Because you do: "all_spec <- c(all_spec, ...)" across all "name in new_names"
+# we can do that once per k:
+
+combined_membership <- list()  # combined_membership[[k]] = all_spec for that k
+
+for (k in colnames(specific_clusters_df)[-1]) {
+  # We'll do a union or concatenation across all name
+  all_spec_for_k <- c()
+  for (name in names(new_names)) {
+    all_spec_for_k <- c(all_spec_for_k, membership_list[[name]][[k]])
+  }
+  # store it
+  combined_membership[[k]] <- all_spec_for_k
+}
+
+### 3) Now, loop over i in names(my_vec) and check membership count
+# We can define a function is i in all_spec_for_k more than 5 times?
+
+for (i in names(my_vec)) {
+  # optional: track if we found a match
+  assigned <- FALSE
+
+  for (k in colnames(specific_clusters_df)[-1]) {
+    # we have combined_membership[[k]] which is a vector of cell names
+    # We do sum(...) or we can do table etc.
+
+    count_i <- sum(combined_membership[[k]] == i)
+    if (count_i > 3) {
+      my_vec[i] <- k
+      assigned <- TRUE
+      break  # we found a match, so let's stop checking further k
+    }
+  }
+
+  if (!assigned) {
+    my_vec[i] <- "NS"
+  }
+}
+table(my_vec) # Mouse_human_specific 2 cells, Too_small_cluster 128 cells
+my_vec[my_vec %in% c('Mouse_human_specific', 'NS')] <- 'Too_small_cluster'
+
+my_data$consensus <- my_vec[colnames(my_data)]
+```
+
+```{r}
+p <- DimPlot_scCustom(my_data, group.by = 'consensus', reduction = 'umap') + DimPlot_scCustom(my_data, group.by = 'smc_phenotypes', reduction = 'umap') & theme(aspect.ratio = 1)
+ggsave(filename = 'UMAP_HERPCA_consensus_at_least_4int.pdf',  plot = p, device = 'pdf', units = 'cm', dpi = 400, width = 8, height = 3, scale = 3)
+```
+
+
+```{r}
+for (name in names(all_datasets)) {
+  all_datasets[[name]]$consensus <-  my_vec[colnames(all_datasets[[name]])]
+  all_datasets[[name]]$specificity_category_original <-
+    all_datasets[[name]]$specificity_category
+  all_datasets[[name]]$specificity_category <- all_datasets[[name]]$consensus
+  all_datasets[[name]]$specificity_category <- factor(all_datasets[[name]]$specificity_category)
+}
+
+```
+
+```{r}
+saveRDS(all_datasets, file = 'r_py_all_datasets_processed_with_specific_clusters.rds')
+```
+
+# Shared phenotypes
+```{r}
+all_datasets <- readRDS("/faststorage/project/THOR/diana/integration_pigs_with_WT/integrated_pig_mice_hum/closer/more_closer/SMC/after_bengal/cluster_specificity/r_py_all_datasets_processed_with_specific_clusters.rds")
+```
+
+
+```{r}
+shared_data <- list()
+for (name in names(all_datasets)) {
+  shared_data[[name]] <- all_datasets[[name]][, all_datasets[[name]]$specificity_category == 'Shared' ]
+}
+
+
+best_resolution <- function(dataset, resolutions, co2, type_integration) {
+  best_res <- NULL
+  best_clusters <- NULL
+  type_integration <- type_integration
+  dataset <- RunUMAP(
+      object = dataset,
+      reduction = type_integration,
+      dims = 1:co2,
+      verbose = FALSE
+    ) %>%
+      FindNeighbors(reduction = type_integration,
+                    dims = 1:co2,
+                    verbose = FALSE)
+  
+  # Iterate over resolutions in decreasing order
+  for (res in rev(resolutions)) {
+    # Run UMAP and clustering for current resolution
+    dataset <-
+      FindClusters(object = dataset,
+        resolution = res,
+        verbose = FALSE
+      )
+    
+    # Extract cluster assignments
+    clusters <- dataset$seurat_clusters
+    
+    # Check if the number of clusters is between 3 and 5
+    num_clusters <- length(unique(clusters))
+    if (num_clusters < 3 || num_clusters > 5) {
+      next  # Skip if the number of clusters is not between 3 and 5
+    }
+    
+    # Check if there are species-specific clusters (splitting by 'species')
+    species <- dataset$species
+    cluster_table <- table(clusters, species)
+    
+    # Check if any cluster is dominated by a single species
+    species_specific_clusters <- apply(cluster_table, 1, function(x) {
+      max(x) / sum(x) > 0.8  # A cluster is considered species-specific if one species dominates > 90%
+    })
+    
+    if (any(species_specific_clusters)) {
+      next  # Skip if there are species-specific clusters
+    }
+    
+    # If it passed the checks, save the resolution and clusters
+    best_res <- res
+    best_clusters <- clusters
+    break  # Stop once we find the highest valid resolution
+  }
+  
+  return(list(best_res = best_res, best_clusters = best_clusters, dataset = dataset))
+}
+
+
+
+# For RPCA and CCA
+for (name in names(all_datasets)[1:6]) {
+  DefaultAssay(shared_data[[name]]) <- 'integrated'
+  
+  shared_data[[name]] <- RunPCA(object = shared_data[[name]], npcs = 40)
+ 
+  # Find significant PCs
+  stdv <- shared_data[[name]][["pca"]]@stdev
+  sum.stdv <- sum(shared_data[[name]][["pca"]]@stdev)
+  percent.stdv <- (stdv / sum.stdv) * 100
+  cumulative <- cumsum(percent.stdv)
+  # co1 <- which(cumulative > 85 & percent.stdv < 5)[1]
+  co2 <- sort(which((percent.stdv[1:length(percent.stdv) - 1] -
+                       percent.stdv[2:length(percent.stdv)]) > 0.1),
+              decreasing = T)[1] + 1
+
+  result <- best_resolution(shared_data[[name]], resolutions = c(0.1, 0.15,0.16, 0.17, 0.18, 0.19, 0.2,0.25, 0.3, 0.35, 0.4), co2 = 13, type_integration = 'pca')
+  
+   # If a valid resolution and clusters were found, update the dataset
+  if (!is.null(result$best_res)) {
+    shared_data[[name]]$seurat_clusters <- result$best_clusters
+    shared_data[[name]]$umap <- result$dataset[["umap"]]  # Save UMAP to the dataset
+    message(paste("Dataset", name, "selected best resolution:", result$best_res))
+  } else {
+    warning(paste("Dataset", name, "did not meet clustering criteria. Skipping..."))
+  }
+}
+
+# For scANVI
+for (name in names(all_datasets)[c(7,9,11)]) {
+  DefaultAssay(shared_data[[name]]) <- 'RNA'
+
+   # Call the function to find the best clustering for each dataset
+  result <- best_resolution(shared_data[[name]], resolutions =  c(0.1, 0.15,0.16, 0.17, 0.18, 0.19, 0.2,0.25, 0.3, 0.35, 0.4), co2 = 10, type_integration = 'X_scANVI')
+  
+   # If a valid resolution and clusters were found, update the dataset
+  if (!is.null(result$best_res)) {
+    shared_data[[name]]$seurat_clusters <- result$best_clusters
+    shared_data[[name]]$umap <- result$dataset[["umap"]]  # Save UMAP to the dataset
+    message(paste("Dataset", name, "selected best resolution:", result$best_res))
+  } else {
+    warning(paste("Dataset", name, "did not meet clustering criteria. Skipping..."))
+  }
+}
+
+
+
+# For scVI
+for (name in names(all_datasets)[c(8, 10, 12)]) {
+  DefaultAssay(shared_data[[name]]) <- 'RNA'
+  
+  # Call the function to find the best clustering for each dataset
+  result <- best_resolution(shared_data[[name]], resolutions =  c(0.1, 0.15,0.16, 0.17, 0.18, 0.19, 0.2,0.25, 0.3, 0.35, 0.4), co2 = 30, type_integration = 'X_scVI')
+  
+   # If a valid resolution and clusters were found, update the dataset
+  if (!is.null(result$best_res)) {
+    shared_data[[name]]$seurat_clusters <- result$best_clusters
+    shared_data[[name]]$umap <- result$dataset[["umap"]]  # Save UMAP to the dataset
+    message(paste("Dataset", name, "selected best resolution:", result$best_res))
+  } else {
+    warning(paste("Dataset", name, "did not meet clustering criteria. Skipping..."))
+  }
+}
+
+
+```
+
+```{r}
+# Create a plot for all datasets with UMAP and colored by 'seurat_clusters'
+plot_list <- list()
+
+for (name in names(shared_data)) {
+  # Retrieve UMAP coordinates and clusters
+  umap_coords <- Embeddings(shared_data[[name]], reduction = "umap")
+  clusters <- shared_data[[name]]$seurat_clusters
+  
+  # Create a data frame for plotting
+  umap_data <- data.frame(UMAP1 = umap_coords[, 1], UMAP2 = umap_coords[, 2], Cluster = as.factor(clusters))
+  
+  # Create UMAP plot for this dataset
+  p <- ggplot(umap_data, aes(x = UMAP1, y = UMAP2, color = Cluster)) +
+    geom_point(size = 1) +
+    labs(title = paste("UMAP -", name)) +
+    theme_minimal() +
+    theme(legend.position = "none")
+  
+  # Add the plot to the list
+  plot_list[[name]] <- p
+}
+
+# Combine all plots into a single grid
+grid.arrange(grobs = plot_list, ncol = 4)  # Adjust ncol for the number of columns
+
+```
+
+```{r}
+markers <- list()
+for (name in names(shared_data)) {
+  Idents(shared_data[[name]]) <- 'seurat_clusters'
+  tmp <- FindAllMarkers(shared_data[[name]], assay = 'RNA_genes', only.pos = T, max.cells.per.ident = 1000)
+  markers[[name]] <- tmp
+}
+saveRDS(markers, 'markers_shared_phenotypes.12.rds')
+```
+
+
+
+```{r}
+# Identify corresponding clusters based on top 100 markers. Cluster with highest ACTA2 - Contractile, cluster with highest LUM - Terminal, others - leave the original name
+
+
+# Initialize the list to store top markers for each dataset and cluster combination
+top_markers_list <- list()
+
+# Loop through the selected datasets
+for (name in names(shared_data)[c(1, 2, 3, 4, 5, 6, 7, 8, 10)]) {
+  # Find markers for each cluster
+  markers <- FindAllMarkers(shared_data[[name]], only.pos = TRUE, assay = 'RNA_genes', max.cells.per.ident = 1000)
+  
+  # Loop through each cluster and find the top 100 genes based on avg_log2FC
+  for (cluster in unique(markers$cluster)) {
+    cluster_markers <- markers[markers$cluster == cluster, ]
+    top_cluster_markers <- cluster_markers[order(cluster_markers$avg_log2FC, decreasing = TRUE), ][1:100, ]
+    
+    # Create a name for the list entry using both dataset name and cluster name
+    list_name <- paste(name, as.character(cluster), sep = ".")
+    
+    # Store the top markers for each dataset and cluster in the list
+    top_markers_list[[list_name]] <- top_cluster_markers
+  }
+}
+
+
+# Function to calculate overlap of top 100 markers between two datasets
+calculate_overlap <- function(dataset1_markers, dataset2_markers) {
+  # Extract gene names from both datasets
+  genes1 <- rownames(dataset1_markers)
+  genes2 <- rownames(dataset2_markers)
+  
+  # Calculate the overlap of gene names
+  overlap_genes <- intersect(genes1, genes2)
+  overlap_count <- length(overlap_genes)
+  
+  return(overlap_count)
+}
+
+# Initialize an empty matrix to store the overlap counts
+dataset_names <- names(top_markers_list)
+overlap_matrix <- matrix(0, nrow = length(dataset_names), ncol = length(dataset_names), 
+                         dimnames = list(dataset_names, dataset_names))
+
+# Loop through each pair of datasets and clusters to calculate the overlap
+for (name1 in dataset_names) {
+  for (name2 in dataset_names) {
+    if (name1 != name2) {
+      # Extract the dataset and cluster names from the list names
+      dataset1 <- strsplit(name1, "\\.")[[1]][1]
+      cluster1 <- strsplit(name1, "\\.")[[1]][2]
+      dataset2 <- strsplit(name2, "\\.")[[1]][1]
+      cluster2 <- strsplit(name2, "\\.")[[1]][2]
+      
+      # Get the top 100 markers for both clusters
+      markers1 <- top_markers_list[[name1]]
+      markers2 <- top_markers_list[[name2]]
+      
+      # Calculate the overlap between the top 100 markers of the two clusters
+      overlap <- calculate_overlap(markers1, markers2)
+      
+      # Store the overlap count in the matrix
+      overlap_matrix[name1, name2] <- overlap
+    }
+  }
+}
+
+# Convert matrix to dataframe for easier visualization
+overlap_df <- as.data.frame(overlap_matrix)
+
+for(i in 1:length(rownames(overlap_df))) {
+  overlap_df[i, 'Integration'] <-
+    strsplit(rownames(overlap_df)[i], "\\.")[[1]][1]
+}
+
+# Display the overlap matrix
+print(overlap_df)
+
+pheatmap(overlap_df[,1:34])
+
+
+
+####
+
+my_celltypes_clusters <- data.frame(
+  Integration_1 = character(),
+  Integration_2 = character(),
+  Cluster = character(),
+  Correspond_Cluster = character()
+)
+
+my_celltypes_clusters_subset <- data.frame(
+  Integration_1 = character(),
+  Integration_2 = character(),
+  Cluster = character(),
+  Correspond_Cluster = character()
+)
+
+
+
+for (j in unique(overlap_df$Integration)) {
+  overlap_df_subset <- overlap_df[overlap_df$Integration == j, 1:34]
+  for (i in 1:length(colnames(overlap_df_subset))) {
+    my_celltypes_clusters_subset[i, 'Integration_2'] <- j
+    
+    my_celltypes_clusters_subset[i, 'Cluster'] <-
+      colnames(overlap_df_subset)[i]
+    
+    
+    my_celltypes_clusters_subset[i, 'Correspond_Cluster'] <-
+      ifelse(is.null(rownames(overlap_df_subset)[which.max(overlap_df_subset[, i])]) == TRUE,
+             0,
+             rownames(overlap_df_subset)[which.max(overlap_df_subset[, i])])
+    
+    my_celltypes_clusters_subset[i, 'Integration_1'] <-
+      strsplit(my_celltypes_clusters_subset[i, 'Cluster'], "\\.")[[1]][1]
+    
+    my_celltypes_clusters <-
+      rbind(my_celltypes_clusters, my_celltypes_clusters_subset)
+  }
+}
+
+my_celltypes_clusters <- my_celltypes_clusters %>%
+  filter(Cluster != Correspond_Cluster) %>%
+  filter(Integration_1 != Integration_2) %>% 
+  distinct()
+
+
+# So far we have identified pairs of corresponding clusters. Now we need to name them to Contractile, Intermediate, and Terminal
+res <- pheatmap(overlap_df[, 1:34])
+mtcars.clust <- cbind(overlap_df[, 1:34], 
+                      cluster = cutree(res$tree_row, 
+                                       k = 5))
+
+
+for (i in 1:length(rownames(mtcars.clust))) {
+  x <- strsplit(rownames(mtcars.clust)[i], "\\.")[[1]][1]
+  z <- strsplit(rownames(mtcars.clust)[i], "\\.")[[1]][2]
+  
+  
+  shared_data[[x]]$cluster_shared[shared_data[[x]]$seurat_clusters == z] <-
+    mtcars.clust[rownames(mtcars.clust)[i], 'cluster']
+  
+}
+
+
+markers <- list()
+for (name in names(shared_data)) {
+  Idents(shared_data[[name]]) <- 'cluster_shared'
+  tmp <- FindAllMarkers(shared_data[[name]], assay = 'RNA_genes', only.pos = T, max.cells.per.ident = 1000)
+  markers[[name]] <- tmp
+}
+
+table(shared_data$many_higher_expr_scVI$seurat_clusters, shared_data$many_higher_expr_scVI$cluster_shared)
+saveRDS(markers, 'markers_shared_phenotypes.12_corresponding_groups.rds')
+
+
+
+for(x in names(shared_data)[c(1, 2, 3, 4, 5, 6, 7, 8, 10)]) {
+  
+     
+  # Initialize the cluster_shared_pheno column as NA
+  shared_data[[x]]$cluster_shared_pheno <- 0
+  
+  # Check if each cluster value exists before assigning phenotype labels
+  if (any(shared_data[[x]]$cluster_shared == 1)) {
+    shared_data[[x]]$cluster_shared_pheno[shared_data[[x]]$cluster_shared == 1] <-  'Intermediate'
+  }
+  
+  if (any(shared_data[[x]]$cluster_shared == 2)) {
+    shared_data[[x]]$cluster_shared_pheno[shared_data[[x]]$cluster_shared == 2] <- 'Terminal'
+  }
+  
+  if (any(shared_data[[x]]$cluster_shared == 3)) {
+    shared_data[[x]]$cluster_shared_pheno[shared_data[[x]]$cluster_shared == 3] <- 'Contractile'
+  }
+  
+  if (any(shared_data[[x]]$cluster_shared == 4)) {
+    shared_data[[x]]$cluster_shared_pheno[shared_data[[x]]$cluster_shared == 4] <- 'Proliferating'
+  }
+  
+  if (any(shared_data[[x]]$cluster_shared == 5)) {
+    shared_data[[x]]$cluster_shared_pheno[shared_data[[x]]$cluster_shared == 5] <- 'Other'
+  }
+}
+```
+
+```{r}
+myplots <- list()
+
+
+for(name in names(shared_data)[c(1, 2, 3, 4, 5, 6, 7, 8, 10)]) {
+ 
+  my_plot = DimPlot(
+  object = shared_data[[name]],
+    reduction = 'umap',
+    group.by = c('cluster_shared_pheno'),
+    pt.size = 0.5,
+    shuffle = TRUE
+  ) + theme(legend.position = 'bottom') + text_sizes + theme(plot.title = element_blank()) + 
+  #    plot_annotation(title =  new_names[name]) +  
+  # theme(text = element_text(size = 10)) +
+    scale_color_manual(values = pal_celltypes) + theme(
+      axis.line = element_blank(),
+      axis.text.y = element_blank(),
+      axis.ticks = element_blank(),
+      axis.text.x = element_blank(),
+      axis.title.x = element_blank(),
+      axis.title.y = element_blank()
+    )
+  myplots[[name]] <- my_plot
+}
+
+p <- plot_grid(plotlist = myplots, nrow = 3, ncol = 3, align = 'hv',  axis = 'b', greedy = T, label_fontfamily = 'Helvetica', label_x = -0.1)
+print(p)
+```
+
+
+```{r}
+saveRDS(shared_data, 'shared_datasets_clusered.rds')
+```
+
+
+```{r}
+my_data <- all_datasets$many_higher_expr_seuratRPCA
+my_data <- my_data[,my_data$consensus == 'Shared']
+DefaultAssay(my_data) <- 'integrated'
+
+my_data <- RunPCA(object = my_data, npcs = 40)
+ElbowPlot(my_data, ndims = 40)
+# Find significant PCs
+stdv <- my_data[["pca"]]@stdev
+sum.stdv <- sum(my_data[["pca"]]@stdev)
+percent.stdv <- (stdv / sum.stdv) * 100
+cumulative <- cumsum(percent.stdv)
+co1 <- which(cumulative > 85 & percent.stdv < 5)[1]
+co2 <- sort(which((percent.stdv[1:length(percent.stdv) - 1] -
+                     percent.stdv[2:length(percent.stdv)]) > 0.1),
+            decreasing = T)[1] + 1
+co1
+co2
+```
+
+
+```{r}
+my_data <- 
+  RunUMAP(object = my_data, reduction = "pca",
+          dims = 1:13,
+          verbose = FALSE) %>%
+  FindNeighbors(reduction = "pca",
+                dims = 1:13,
+                verbose = FALSE) %>%
+  FindClusters(resolution = c(0.1, 0.15,0.17, 0.18,0.19, 0.2, 0.3, 0.35, 0.4),
+               verbose = FALSE)
+
+DimPlot_scCustom(my_data, group.by = 'integrated_snn_res.0.17', split.by = 'species')
+table(my_data$integrated_snn_res.0.17, my_data$species)
+Idents(my_data) <- 'integrated_snn_res.0.17'
+tmp <- FindAllMarkers(my_data, assay = 'RNA_genes', only.pos = T, max.cells.per.ident = 2000)
+saveRDS(tmp, file = 'shared_clusters_markers_cell_categorization.rds')
+
+my_data$smc_phenotypes <- as.factor(as.character(my_data$smc_phenotypes))
+
+DimPlot_scCustom(my_data, group.by = 'integrated_snn_res.0.17', reduction = 'umap') + DimPlot_scCustom(my_data, group.by = 'smc_phenotypes', reduction = 'umap') 
+DimPlot_scCustom(my_data, group.by = 'integrated_snn_res.0.17', split.by = 'species', reduction = 'umap')
+Idents(my_data) <- 'integrated_snn_res.0.17'
+new_names <-
+  c("Terminal", "Transitional",
+    "Contractile" , 'Proliferating')
+names(new_names) <- levels(Idents(my_data))
+
+my_data <-
+  Seurat::RenameIdents(object = my_data, new_names)
+new_names <- Idents(my_data)
+my_data$shared_clusters <-
+  new_names
+
+p1 <- DimPlot_scCustom(my_data, group.by = 'shared_clusters', split.by = 'species', colors_use = pal_celltypes_pig[c(3,1,2,5)], aspect_ratio = 1, split_seurat = T, reduction = 'umap')
+p1
+ggsave(filename = 'reclustered_shared_SMCs_split_cell_categorization.pdf', plot = p1, width = 6, height = 6, units = 'cm', scale = 3)
+saveRDS(my_data, 'HE_RPCA_cell_categorization.rds')
+##############
+##############
+# Perform differential expression analysis
+Idents(my_data) <- 'shared_clusters'
+
+# #scVI does not have all genes, only variable. Transfer labels for shared clusters from scVI to HE_RPCA
+# my_data_scVI <- my_data
+# my_data <- all_datasets_el$many_higher_expr_seuratRPCA
+# my_data <- my_data[,colnames(my_data) %in% colnames(my_data_scVI)]
+# my_data$shared_clusters <- my_data_scVI$shared_clusters[colnames(my_data)]
+# my_data$RNA_snn_res.0.3 <- my_data_scVI$RNA_snn_res.0.3[colnames(my_data)]
+
+DefaultAssay(my_data) <- 'RNA_genes'
+markers_contractile_vs_terminal <- FindMarkers(my_data, ident.1 = "Contractile", ident.2 = "Terminal")
+markers_contractile_vs_transitional <- FindMarkers(my_data, ident.1 = "Contractile", ident.2 = "Transitional")
+markers_terminal_vs_transitional <- FindMarkers(my_data, ident.1 = "Terminal", ident.2 = "Transitional")
+
+# Identify genes uniquely high in contractile vs terminal but also present in transitional
+gene1_candidates <- subset(markers_contractile_vs_terminal, avg_log2FC > 0.1 & p_val_adj < 0.05)
+gene1_candidates <- intersect(rownames(gene1_candidates), rownames(subset(markers_contractile_vs_transitional, avg_log2FC > 1)))
+
+# Identify genes uniquely high in terminal vs contractile but also present in transitional
+gene2_candidates <- subset(markers_terminal_vs_transitional, avg_log2FC > 1 & p_val_adj < 0.05)
+gene2_candidates <- intersect(rownames(gene2_candidates), rownames(subset(markers_contractile_vs_transitional, avg_log2FC < 0.7)))
+
+# Plotting expression profiles for selected candidate genes
+if(length(gene1_candidates) > 0 && length(gene2_candidates) > 0) {
+  FeaturePlot(my_data, features = c(gene1_candidates[1], gene2_candidates[1]), cols = c("blue", "red"), reduction = 'umap')
+}
+
+rownames(subset(markers_contractile_vs_transitional, avg_log2FC < 0))[rownames(subset(markers_contractile_vs_transitional, avg_log2FC < 0)) %in% rownames(subset(markers_terminal_vs_transitional, avg_log2FC < 0))]
+
+FeaturePlot(object = my_data, features = c('PSMB1', 'THBS2'), blend = T, blend.threshold = 0.1, pt.size = 1)
+
+#########################################################
+# Assuming data is normalized and ready for analysis
+# Get the expression matrix
+Idents(my_data) <- 'shared_clusters'
+data_mat <- GetAssayData(my_data, slot = "data", assay = 'RNA_genes')
+
+# Binary matrix: 1 if expressed, 0 if not
+binary_mat <- data_mat > 1  # Adjust this threshold as needed
+
+# Get cluster identities
+clusters <- Idents(my_data)
+
+# Prepare an empty data frame to store the results
+results_df <- data.frame(
+  Gene1 = character(),
+  Gene2 = character(),
+  Cluster = character(),
+  PercExprGene1 = numeric(),
+  PercExprGene2 = numeric(),
+  PercBothExpr = numeric(),
+  stringsAsFactors = FALSE
+)
+
+
+
+evaluate_and_store_results <- function(gene1, gene2, binary_mat, clusters) {
+  expr1 <- binary_mat[gene1, ]
+  expr2 <- binary_mat[gene2, ]
+  
+  clusters_unique <- unique(clusters)
+  
+  for (cluster in clusters_unique) {
+    cluster_cells <- which(clusters == cluster)
+    num_cells <- length(cluster_cells)
+    
+    if (num_cells > 0) {  # Ensure division by zero is not performed
+      # Calculate percentages
+      perc_expr1 <- sum(expr1[cluster_cells] & !expr2[cluster_cells]) / num_cells * 100
+      perc_expr2 <- sum(!expr1[cluster_cells] & expr2[cluster_cells]) / num_cells * 100
+      perc_both <- sum(expr1[cluster_cells] & expr2[cluster_cells]) / num_cells * 100
+      
+      # Append results to the dataframe
+      results_df <<- rbind(results_df, data.frame(
+        Gene1 = gene1,
+        Gene2 = gene2,
+        Cluster = cluster,
+        PercExprGene1 = perc_expr1,
+        PercExprGene2 = perc_expr2,
+        PercBothExpr = perc_both,
+        stringsAsFactors = FALSE
+      ))
+    }
+  }
+}
+
+
+tmp1 <- FindAllMarkers(object = my_data[,my_data$species == 'human'], assay = 'RNA_genes', only.pos = T)
+tmp2 <- FindAllMarkers(object = my_data[,my_data$species == 'mouse'], assay = 'RNA_genes', only.pos = T)
+tmp3 <- FindAllMarkers(object = my_data[,my_data$species == 'pig'], assay = 'RNA_genes', only.pos = T)
+
+contr_g <- intersect(intersect(tmp1[tmp1$cluster == 'Contractile' & tmp1$avg_log2FC > 0.5, 'gene'] , tmp2[tmp2$cluster == 'Contractile' & tmp2$avg_log2FC > 0.5, 'gene'] ) ,  tmp3[tmp3$cluster == 'Contractile' & tmp3$avg_log2FC > 0.5, 'gene'] )
+trans_g <- intersect(intersect(tmp1[tmp1$cluster == 'Transitional' & tmp1$avg_log2FC > 0, 'gene'] , tmp2[tmp2$cluster == 'Transitional' & tmp2$avg_log2FC > 0, 'gene'] ) ,  tmp3[tmp3$cluster == 'Transitional' & tmp3$avg_log2FC > 0, 'gene'] )
+term_g <- intersect(intersect(tmp1[tmp1$cluster == 'Terminal' & tmp1$avg_log2FC > 0.5, 'gene'] , tmp2[tmp2$cluster == 'Terminal' & tmp2$avg_log2FC > 0.5, 'gene'] ) ,  tmp3[tmp3$cluster == 'Terminal' & tmp3$avg_log2FC > 0.5, 'gene'] )
+
+gn <- unique(c(contr_g, trans_g, term_g))
+
+for (i in 1:(length(gn) - 1)) {
+  for (j in (i + 1):length(gn)) {
+    evaluate_and_store_results(gn[i], gn[j], binary_mat, clusters)
+  }
+}
+saveRDS(results_df, 'best_pair_shareds.rds')
+
+# Ensure all relevant columns are in correct format, particularly not lists unless intended
+results_df$PercExprGene1 <- as.numeric(as.character(results_df$PercExprGene1))
+results_df$PercExprGene2 <- as.numeric(as.character(results_df$PercExprGene2))
+results_df$PercBothExpr <- as.numeric(as.character(results_df$PercBothExpr))
+
+
+# Assuming results_df is already populated and contains the columns:
+# Gene1, Gene2, Cluster, PercExprGene1, PercExprGene2, PercBothExpr
+
+# Base R approach using reshape()
+wide_df_base <- reshape(results_df, 
+                        timevar = "Cluster", 
+                        idvar = c("Gene1", "Gene2"),
+                        direction = "wide",
+                        sep = "_")
+
+# Check the output
+print(wide_df_base)
+
+
+# wide_df <- results_df %>%
+#   pivot_wider(
+#     names_from = Cluster, 
+#     values_from = c(PercExprGene1, PercExprGene2, PercBothExpr),
+#     names_glue = "{Cluster}_{.value}"  # Naming pattern to distinguish columns per cluster and metric
+#   )
+# 
+# wide_df$Terminal_PercExprGene1 <- as.numeric(as.character(results_df$PercExprGene1))
+# wide_df$PercExprGene2 <- as.numeric(as.character(results_df$PercExprGene2))
+# wide_df$PercBothExpr <- as.numeric(as.character(results_df$PercBothExpr))
+
+
+# Check the newly formatted dataframe
+print(wide_df_base)
+saveRDS(wide_df_base, 'best_pair_shared_wide_scVI.rds')
+openxlsx::write.xlsx(x = wide_df_base, file = 'best_pair_shared_wide_cell_categorization.xlsx')
+
+DefaultAssay(my_data) <- 'RNA_genes'
+FeaturePlot(my_data, features = c('LTBP2', 'CNN1'),reduction = 'umap',pt.size = 0.7, order = T,  blend = T, cols = c("darkblue", "green", "magenta"), blend.threshold = 0.5) &DarkTheme() &NoAxes() & plot_annotation(title = 'Carotid HS')
+
+
+##############
+##############
+# Make lists of genes that are conservatively expressed across species in the shared SMC phenotypes
+gene_list <- list()
+tmp <- list()
+
+for (i in unique(my_data$shared_clusters)) {
+  for (j in unique(my_data$species)) {
+    exrMat <-
+      GetAssayData(my_data[, my_data$shared_clusters == i &
+                             my_data$species == j], slot = 'data', assay = 'RNA_genes')
+    
+    # Step 1: Determine if a gene is expressed in a cell
+    # Assuming any value greater than 0 indicates expression
+    is_expressed <- exrMat > 0
+    
+    # Step 2: Calculate the percentage of cells in which each gene is expressed
+    percent_expressed <- rowSums(is_expressed) / ncol(exrMat) * 100
+    
+    # Step 3: Identify genes expressed in at least 10% of cells
+    keep_genes <-
+      names(percent_expressed)[percent_expressed >= 10]
+    tmp[[j]] <- keep_genes
+  }
+   tmp_2 <-
+   as.data.frame(sort(Reduce(intersect,list( tmp$pig, tmp$human, tmp$mouse)), decreasing = F) )
+   colnames(tmp_2) <- paste('conservative_genes', i)
+  gene_list[[i]] <- tmp_2
+}
+
+openxlsx::write.xlsx(gene_list, file = 'conservative_genes_expressed_min10pct_per_phenotype_cell_categorization.xlsx', overwrite = T)
+
+table(my_data$integrated_snn_res.0.17, my_data$species)
+
+# Make balanced dataset
+set.seed(1984)
+my_data_balanced <- my_data[,colnames(my_data) %in% c(
+  sample(names(my_data$species[my_data$species == 'human' & my_data$integrated_snn_res.0.17 == 0]), size = 600, replace = F),
+  sample(names(my_data$species[my_data$species == 'human' & my_data$integrated_snn_res.0.17 == 1]), size = 500, replace = F),
+  sample(names(my_data$species[my_data$species == 'human' & my_data$integrated_snn_res.0.17 == 2]), size = 500, replace = F),
+  sample(names(my_data$species[my_data$species == 'human' & my_data$integrated_snn_res.0.17 == 3]), size = 6, replace = F),
+  
+  
+  sample(names(my_data$species[my_data$species == 'pig' & my_data$integrated_snn_res.0.17 == 0]), size = 600, replace = F) ,
+  sample(names(my_data$species[my_data$species == 'pig' & my_data$integrated_snn_res.0.17 == 1]), size = 500, replace = F) ,
+  sample(names(my_data$species[my_data$species == 'pig' & my_data$integrated_snn_res.0.17 == 2]), size = 500, replace = F) ,
+  sample(names(my_data$species[my_data$species == 'pig' & my_data$integrated_snn_res.0.17 == 3]), size = 6, replace = F) ,
+  
+  
+  sample(names(my_data$species[my_data$species == 'mouse' & my_data$integrated_snn_res.0.17 == 0]), size = 600, replace = F),
+  sample(names(my_data$species[my_data$species == 'mouse' & my_data$integrated_snn_res.0.17 == 1]), size = 500, replace = F),
+  sample(names(my_data$species[my_data$species == 'mouse' & my_data$integrated_snn_res.0.17 == 2]), size = 180, replace = F),
+  sample(names(my_data$species[my_data$species == 'mouse' & my_data$integrated_snn_res.0.17 == 3]), size = 6, replace = F)
+  )]
+
+table(my_data_balanced$species, my_data_balanced$integrated_snn_res.0.17)
+
+DimPlot_scCustom(my_data_balanced, group.by = 'integrated_snn_res.0.17', split.by = 'species', reduction = 'umap')
+
+Idents(my_data_balanced) <- 'integrated_snn_res.0.17'
+DefaultAssay(my_data_balanced) <- 'RNA_genes'
+
+tmp <- FindAllMarkers(my_data_balanced, only.pos = T, min.pct = 0.3)
+# tmp <-  tmp[tmp$p_val_adj < 0.05,]
+FeaturePlot_scCustom(my_data_balanced, features = c('THBS1', 'SERPINE2'), split.by = 'species', reduction = 'umap')
+
+
+#### DEseq2
+final_species_genes <- readRDS("/faststorage/project/THOR/diana/integration_pigs_with_WT/integrated_pig_mice_hum/closer/more_closer/biomart_109_orth_new.rds")
+final_species_genes$Human_gene_name_v98 <- ifelse(is.na(final_species_genes$Human_gene_name_v98) == TRUE, final_species_genes$`Human Ensembl ID`, final_species_genes$Human_gene_name_v98)
+final_species_genes$Human_gene_name_v98 <- ifelse(final_species_genes$Human_gene_name_v98 == '', final_species_genes$`Human Ensembl ID`, final_species_genes$Human_gene_name_v98)
+
+CreatePseudoBulkData <- function(raw.data,normalized.data,sample.id,fun="sum")
+{
+    # fun can be "sum" or "mean"
+    library(muscat)
+    library(SingleCellExperiment)
+    
+    if (fun=="sum")
+    {
+        sce <- SingleCellExperiment(assays=list(counts=raw.data),colData=DataFrame(sample_id=sample.id))
+    } else if (fun=="mean") {
+        sce <- SingleCellExperiment(assays=list(counts=normalized.data),colData=DataFrame(sample_id=sample.id))
+    }
+    pb <- aggregateData(sce, assay = "counts", fun=fun, by=c("sample_id"))
+    return(pb)
+}
+    
+# Make counts slot with gene names
+my_counts <-
+  GetAssayData(object = my_data_balanced,
+               assay = 'RNA',
+               slot = 'counts')
+rownames(my_counts) <-
+  gsub(pattern = '-0',
+       replacement = '',
+       x = rownames(my_counts))
+rownames(my_counts) %in% final_species_genes$`Pig Ensembl ID` %>% table()
+rownames(my_counts)[!rownames(my_counts) %in% final_species_genes$`Pig Ensembl ID`]
+
+my_counts <-
+  my_counts[rownames(my_counts)[rownames(my_counts) %in% final_species_genes$`Pig Ensembl ID`],]
+
+rownames(final_species_genes) <-
+  final_species_genes$`Pig Ensembl ID`
+df <-
+  data.frame(
+    pig_ens_data = rownames(my_counts),
+    transl_human_gene = final_species_genes[rownames(my_counts), 'Human_gene_name_v98'],
+    transl_hum_ens = final_species_genes[rownames(my_counts), 'Human Ensembl ID']
+  )
+
+rownames(df) <- df$pig_ens_data
+rownames(my_counts) <-
+  df[rownames(my_counts), 'transl_human_gene']
+
+# Run DESeq2 across species within each shared SMC cluster (pairwise)
+deseq2_res <- list()
+for(i in unique(my_data_balanced$shared_clusters)) {
+  my_data_balanced_subset <-
+    my_data_balanced[, my_data_balanced$shared_clusters == i]
+  pb <-
+    CreatePseudoBulkData(
+      raw.data = my_counts[, colnames(my_counts) %in% colnames(my_data_balanced_subset)],
+      sample.id = my_data_balanced_subset$orig.ident,
+      fun = 'sum'
+    )
+  
+  bca <-
+    as.data.frame.matrix(table(my_data_balanced_subset$orig.ident, my_data_balanced_subset$species))
+  group <- apply(bca, 1, function(x)
+    colnames(bca)[which.max(x)])
+  
+  
+  #Make the model and contrast for statistical testing
+  df_con <- DataFrame(condition = factor(group))
+  pb_counts <- assay(pb)
+  mode(pb_counts) <- "integer"
+  dge <- DESeqDataSetFromMatrix(pb_counts,
+                                colData = df_con,
+                                design = ~ 0 + condition)
+  dds <- DESeq(dge, betaPrior = FALSE)
+  
+  hp_res <-
+    results(
+      dds,
+      contrast = c("condition", "human", "pig"),
+      independentFiltering = TRUE,
+      alpha = 0.05,
+      pAdjustMethod = "BH",
+      parallel = FALSE
+    )
+  hp_res <-
+    lfcShrink(
+      dds,
+      contrast = c("condition", "human", "pig"),
+      res = hp_res,
+      type = 'ashr'
+    )
+  hp_res <-
+    as.data.frame(hp_res@listData, row.names = hp_res@rownames)
+  
+  
+  colnames(hp_res) <- paste('HP', colnames(hp_res), sep = '_')
+  
+  hm_res <-
+    results(
+      dds,
+      contrast = c("condition", "human", "mouse"),
+      independentFiltering = TRUE,
+      alpha = 0.05,
+      pAdjustMethod = "BH",
+      parallel = FALSE
+    )
+  hm_res <-
+    lfcShrink(
+      dds,
+      contrast = c("condition", "human", "mouse"),
+      res = hm_res,
+      type = 'ashr'
+    )
+  hm_res <-
+    as.data.frame(hm_res@listData, row.names = hm_res@rownames)
+  colnames(hm_res) <- paste('HM', colnames(hm_res), sep = '_')
+  
+  pm_res <-
+    results(
+      dds,
+      contrast = c("condition", "pig", "mouse"),
+      independentFiltering = TRUE,
+      alpha = 0.05,
+      pAdjustMethod = "BH",
+      parallel = FALSE
+    )
+  pm_res <-
+    lfcShrink(
+      dds,
+      contrast = c("condition", "pig", "mouse"),
+      res = pm_res,
+      type = 'ashr'
+    )
+  pm_res <-
+    as.data.frame(pm_res@listData, row.names = pm_res@rownames)
+  colnames(pm_res) <- paste('PM', colnames(pm_res), sep = '_')
+  
+  res_all_org <- cbind(hp_res, hm_res, pm_res)
+  res_all_org$gene <- rownames(res_all_org)
+  res_all_org$exp_PIG <- rowMeans2(expm1(subset(my_data_balanced_subset, species == 'pig')[["RNA_genes"]]@data[rownames(res_all_org), ]))
+  res_all_org$exp_HUMAN <- rowMeans2(expm1(subset(my_data_balanced_subset, species == 'human')[["RNA_genes"]]@data[rownames(res_all_org), ]))
+  res_all_org$exp_MOUSE <- rowMeans2(expm1(subset(my_data_balanced_subset, species == 'mouse')[["RNA_genes"]]@data[rownames(res_all_org), ]))
+  
+  res_all_org$pct_PIG <- rowSums(subset(my_data_balanced_subset, species == 'pig')[["RNA_genes"]]@data[rownames(res_all_org), ] > 0) / ncol(subset(my_data_balanced_subset, species == 'pig')[["RNA_genes"]]@data[rownames(res_all_org), ] > 0) * 100
+  res_all_org$pct_HUMAN <- rowSums(subset(my_data_balanced_subset, species == 'human')[["RNA_genes"]]@data[rownames(res_all_org), ] > 0) / ncol(subset(my_data_balanced_subset, species == 'human')[["RNA_genes"]]@data[rownames(res_all_org), ] > 0) * 100
+  res_all_org$pct_MOUSE <- rowSums(subset(my_data_balanced_subset, species == 'mouse')[["RNA_genes"]]@data[rownames(res_all_org), ] > 0) / ncol(subset(my_data_balanced_subset, species == 'mouse')[["RNA_genes"]]@data[rownames(res_all_org), ] > 0) * 100
+
+  deseq2_res[[i]] <- res_all_org
+}
+saveRDS(deseq2_res, file = 'deseq2.pairwise.shared.SMC.clusters_Elastic_cell_categorization.rds')
+write.xlsx(deseq2_res, 'deseq2.pairwise.shared.SMC.clusters_Elastic_cell_categorization.xlsx', overwrite = T)
+
+#### Shared coronary SMC clusters
+all_datasets_cor <- readRDS("/faststorage/project/THOR/diana/integration_pigs_with_WT/integrated_pig_mice_hum/closer/more_closer/SMC/coronaries/after_bengal/r_py_all_datasets_processed_with_specific_clusters_coronary_2.rds")
+my_data_cor <- all_datasets$many_higher_expr_seuratRPCA
+my_data_cor$run <- 'coronary'
+
+my_data <- my_data_cor[,my_data_cor$specificity_category == 'Shared']
+DefaultAssay(my_data) <- 'integrated'
+# my_data <- RunPCA(object = my_data, npcs = 40)
+ElbowPlot(my_data, ndims = 40)
+my_data <- 
+  RunUMAP(object = my_data, reduction = "pca",
+          dims = 1:16,
+          verbose = FALSE) %>%
+  FindNeighbors(reduction = "pca",
+                dims = 1:16,
+                verbose = FALSE) %>%
+  FindClusters(resolution = c(0.1, 0.15,  0.2, 0.25, 0.3, 0.35),
+               verbose = FALSE)
+
+
+table(my_data$integrated_snn_res.0.3, my_data$species)
+# my_data$species_run <- paste(my_data$species, my_data$run, sep = '_')
+DimPlot_scCustom(my_data, group.by = 'integrated_snn_res.0.2',  reduction = 'umap') 
+
+my_data$smc_phenotypes <- as.factor(as.character(my_data$smc_phenotypes))
+
+DimPlot_scCustom(my_data, group.by = 'integrated_snn_res.0.2', reduction = 'umap') + DimPlot_scCustom(my_data, group.by = 'smc_phenotypes', reduction = 'umap') 
+DimPlot_scCustom(my_data, group.by = 'integrated_snn_res.0.2', split.by = 'species', reduction = 'umap')
+DimPlot_scCustom(my_data, group.by = 'smc_phenotypes', split.by = 'species', reduction = 'umap')
+Idents(my_data) <- 'integrated_snn_res.0.2'
+tmp <- FindAllMarkers(my_data, assay = 'RNA_genes', only.pos = T)
+
+new_names <-
+  c('Terminal',
+    "Contractile",
+    "Fibroblasts",
+     "Transitional",
+    'IFN_SMC'
+    )
+names(new_names) <- levels(Idents(my_data))
+
+my_data <-
+  Seurat::RenameIdents(object = my_data, new_names)
+new_names <- Idents(my_data)
+my_data$shared_clusters <-
+  new_names
+pal_celltypes_pig <- c("#E18727FF", "#0072B5FF",  "#BC3C29FF", "#20854EFF", "#7876B1FF" ,"#FFDC91FF", "#EE4C97FF")
+p1 <- DimPlot_scCustom(my_data, group.by = 'shared_clusters', split.by = 'species', colors_use = pal_celltypes_pig[c(3,2,6,1,7)], aspect_ratio = 1, split_seurat = T)
+p1
+ggsave(filename = 'reclustered_shared_SMCs_split_Cor.pdf', plot = p1, width = 6, height = 6, units = 'cm', scale = 3)
+# Make lists of genes that are conservatively expressed across species in the shared SMC phenotypes
+gene_list <- list()
+tmp <- list()
+
+for (i in unique(my_data$shared_clusters)) {
+  for (j in unique(my_data$species)) {
+    exrMat <-
+      GetAssayData(my_data[, my_data$shared_clusters == i &
+                             my_data$species == j], slot = 'data', assay = 'RNA_genes')
+    
+    # Step 1: Determine if a gene is expressed in a cell
+    # Assuming any value greater than 0 indicates expression
+    is_expressed <- exrMat > 0
+    
+    # Step 2: Calculate the percentage of cells in which each gene is expressed
+    percent_expressed <- rowSums(is_expressed) / ncol(exrMat) * 100
+    
+    # Step 3: Identify genes expressed in at least 20% of cells
+    keep_genes <-
+      names(percent_expressed)[percent_expressed >= 10]
+    tmp[[j]] <- keep_genes
+  }
+   tmp_2 <-
+   as.data.frame(sort(Reduce(intersect,list( tmp$sscrofa, tmp$hsapiens)), decreasing = F) )
+   colnames(tmp_2) <- paste('conservative_genes', i)
+  gene_list[[i]] <- tmp_2
+}
+
+openxlsx::write.xlsx(gene_list, file = 'conservative_genes_expressed_min10pct_per_phenotype_Cor_9010_cell_categorization.xlsx', overwrite = T)
+
+table(my_data$integrated_snn_res.0.2, my_data$species)
+# Make balanced dataset
+
+my_data_balanced <- my_data[,colnames(my_data) %in% c(
+  sample(names(my_data$species_2[my_data$species_2 == 'human' & my_data$shared_clusters == 'Terminal']), size = 200, replace = F),
+  sample(names(my_data$species_2[my_data$species_2 == 'human' & my_data$shared_clusters == 'Contractile']), size = 200, replace = F),
+  sample(names(my_data$species_2[my_data$species_2 == 'human' & my_data$shared_clusters == 'Fibroblasts']), size = 200, replace = F),
+  sample(names(my_data$species_2[my_data$species_2 == 'human' & my_data$shared_clusters == 'Transitional']), size = 200, replace = F),
+  sample(names(my_data$species_2[my_data$species_2 == 'human' & my_data$shared_clusters == 'IFN_SMC']), size = 10, replace = F),
+  
+  sample(names(my_data$species_2[my_data$species_2 == 'pig' & my_data$shared_clusters == 'Terminal']), size = 200, replace = F) ,
+  sample(names(my_data$species_2[my_data$species_2 == 'pig' & my_data$shared_clusters == 'Contractile']), size = 200, replace = F) ,
+  sample(names(my_data$species_2[my_data$species_2 == 'pig' & my_data$shared_clusters == 'Fibroblasts']), size = 200, replace = F) ,
+  sample(names(my_data$species_2[my_data$species_2 == 'pig' & my_data$shared_clusters == 'Transitional']), size = 200, replace = F) ,
+  sample(names(my_data$species_2[my_data$species_2 == 'pig' & my_data$shared_clusters == 'IFN_SMC']), size = 10, replace = F) 
+  )]
+
+table(my_data_balanced$species, my_data_balanced$shared_clusters)
+
+DimPlot_scCustom(my_data_balanced, group.by = 'shared_clusters', split.by = 'species')
+
+Idents(my_data_balanced) <- 'integrated_snn_res.0.2'
+DefaultAssay(my_data_balanced) <- 'RNA_genes'
+
+tmp <- FindAllMarkers(my_data_balanced, only.pos = T, min.pct = 0.3)
+tmp <-  tmp[tmp$p_val_adj < 0.05,]
+FeaturePlot_scCustom(my_data_balanced, features = c('THBS1', 'SERPINE2'), split.by = 'species')
+
+
+#### DEseq2
+final_species_genes <- readRDS("/faststorage/project/THOR/diana/integration_pigs_with_WT/integrated_pig_mice_hum/closer/more_closer/biomart_109_orth_new.rds")
+final_species_genes$Human_gene_name_v98 <- ifelse(is.na(final_species_genes$Human_gene_name_v98) == TRUE, final_species_genes$`Human Ensembl ID`, final_species_genes$Human_gene_name_v98)
+final_species_genes$Human_gene_name_v98 <- ifelse(final_species_genes$Human_gene_name_v98 == '', final_species_genes$`Human Ensembl ID`, final_species_genes$Human_gene_name_v98)
+
+CreatePseudoBulkData <- function(raw.data,normalized.data,sample.id,fun="sum")
+{
+    # fun can be "sum" or "mean"
+    library(muscat)
+    library(SingleCellExperiment)
+    
+    if (fun=="sum")
+    {
+        sce <- SingleCellExperiment(assays=list(counts=raw.data),colData=DataFrame(sample_id=sample.id))
+    } else if (fun=="mean") {
+        sce <- SingleCellExperiment(assays=list(counts=normalized.data),colData=DataFrame(sample_id=sample.id))
+    }
+    pb <- aggregateData(sce, assay = "counts", fun=fun, by=c("sample_id"))
+    return(pb)
+}
+    
+# Make counts slot with gene names
+my_counts <-
+  GetAssayData(object = my_data_balanced,
+               assay = 'RNA',
+               slot = 'counts')
+rownames(my_counts) <-
+  gsub(pattern = '-0',
+       replacement = '',
+       x = rownames(my_counts))
+rownames(my_counts) %in% final_species_genes$`Pig Ensembl ID` %>% table()
+rownames(my_counts)[!rownames(my_counts) %in% final_species_genes$`Pig Ensembl ID`]
+
+my_counts <-
+  my_counts[rownames(my_counts)[rownames(my_counts) %in% final_species_genes$`Pig Ensembl ID`],]
+
+rownames(final_species_genes) <-
+  final_species_genes$`Pig Ensembl ID`
+df <-
+  data.frame(
+    pig_ens_data = rownames(my_counts),
+    transl_human_gene = final_species_genes[rownames(my_counts), 'Human_gene_name_v98'],
+    transl_hum_ens = final_species_genes[rownames(my_counts), 'Human Ensembl ID']
+  )
+
+rownames(df) <- df$pig_ens_data
+rownames(my_counts) <-
+  df[rownames(my_counts), 'transl_human_gene']
+
+# Run DESeq2 across species within each shared SMC cluster (pairwise)
+deseq2_res <- list()
+for(i in unique(my_data_balanced$shared_clusters)) {
+  my_data_balanced_subset <-
+    my_data_balanced[, my_data_balanced$shared_clusters == i]
+  pb <-
+    CreatePseudoBulkData(
+      raw.data = my_counts[, colnames(my_counts) %in% colnames(my_data_balanced_subset)],
+      sample.id = my_data_balanced_subset$orig.ident,
+      fun = 'sum'
+    )
+  
+  bca <-
+    as.data.frame.matrix(table(my_data_balanced_subset$orig.ident, my_data_balanced_subset$species_2))
+  group <- apply(bca, 1, function(x)
+    colnames(bca)[which.max(x)])
+  
+  
+  #Make the model and contrast for statistical testing
+  df_con <- DataFrame(condition = factor(group))
+  pb_counts <- assay(pb)
+  mode(pb_counts) <- "integer"
+  dge <- DESeqDataSetFromMatrix(pb_counts,
+                                colData = df_con,
+                                design = ~ 0 + condition)
+  dds <- DESeq(dge, betaPrior = FALSE)
+  
+  hp_res <-
+    results(
+      dds,
+      contrast = c("condition", "human", "pig"),
+      independentFiltering = TRUE,
+      alpha = 0.05,
+      pAdjustMethod = "BH",
+      parallel = FALSE
+    )
+  hp_res <-
+    lfcShrink(
+      dds,
+      contrast = c("condition", "human", "pig"),
+      res = hp_res,
+      type = 'ashr'
+    )
+  hp_res <-
+    as.data.frame(hp_res@listData, row.names = hp_res@rownames)
+  
+  
+  colnames(hp_res) <- paste('HP', colnames(hp_res), sep = '_')
+  
+  
+  res_all_org <- cbind(hp_res)
+  res_all_org$gene <- rownames(res_all_org)
+  res_all_org$exp_PIG <- rowMeans2(expm1(subset(my_data_balanced_subset, species_2 == 'pig')[["RNA_genes"]]@data[rownames(res_all_org), ]))
+  res_all_org$exp_HUMAN <- rowMeans2(expm1(subset(my_data_balanced_subset, species_2 == 'human')[["RNA_genes"]]@data[rownames(res_all_org), ]))
+  
+  res_all_org$pct_PIG <- rowSums(subset(my_data_balanced_subset, species_2 == 'pig')[["RNA_genes"]]@data[rownames(res_all_org), ] > 0) / ncol(subset(my_data_balanced_subset, species_2 == 'pig')[["RNA_genes"]]@data[rownames(res_all_org), ] > 0) * 100
+  res_all_org$pct_HUMAN <- rowSums(subset(my_data_balanced_subset, species_2 == 'human')[["RNA_genes"]]@data[rownames(res_all_org), ] > 0) / ncol(subset(my_data_balanced_subset, species_2 == 'human')[["RNA_genes"]]@data[rownames(res_all_org), ] > 0) * 100
+
+  deseq2_res[[i]] <- res_all_org
+}
+saveRDS(deseq2_res, file = 'deseq2.pairwise.shared.SMC.clusters_Coronary_9010_cell_categorization.rds')
+write.xlsx(deseq2_res, 'deseq2.pairwise.shared.SMC.clusters_Coronary_9010_cell_categorization.xlsx', overwrite = T)
+saveRDS(my_data, 'shared_Cor_HE_RPCA_cell_categorization.rds')
+```
+
+
+```{r}
+## Rank comparison
+# avex <- AverageExpression(my_data, assays = 'RNA_genes', group.by = 'orig.ident', slot = 'data')
+# avex2 <- apply(avex$RNA_genes, 2, rank_my)
+# bca <- as.data.frame.matrix(table(my_data$orig.ident, my_data$species))
+# nl<- apply(bca, 1, function(x) colnames(bca)[which.max(x)])
+# avex4 <- avex2[!(rowMax(avex2) < 0.33),]
+
+
+minMax <- function(x) {
+  (x - min(x)) / (max(x) - min(x))
+}
+rank_my <- function(x) {
+  rank(x) / length(x)
+}
+
+
+rank_test <- list()
+for(i in unique(my_data_balanced$shared_clusters)) {
+  my_data_subset <- my_data_balanced[,my_data_balanced$shared_clusters == i]
+  avex <-
+    AverageExpression(my_data_subset,
+                      assays = 'RNA_genes',
+                      group.by = 'orig.ident',
+                      slot = 'data')
+  
+  
+  #rank data using custom function
+  avex2 <- apply(avex$RNA_genes, 2, rank_my)
+  avex4 <- avex2[!(rowMax(avex2) < 0.33),]
+  
+  bca <-
+    as.data.frame.matrix(table(my_data_subset$orig.ident, my_data_subset$species))
+  nl <- apply(bca, 1, function(x)
+    colnames(bca)[which.max(x)])
+  
+  kr.test <- apply(avex4, 1, function(x) {
+  res <- kruskal.test(x ~ nl)
+  return(c(res$statistic, res$p.value))
+})
+  kr.test <- data.frame(t(kr.test))
+  colnames(kr.test) <- c("kr.chisq", "kr.p.value")
+  kr.test$kr.p.fdr <- p.adjust(kr.test$kr.p.value, method = "fdr")
+  table(kr.test$kr.p.fdr < 0.05)
+  kr.test$gene <- rownames(kr.test)
+  
+  # ## Wilcox test
+  # wilc.test.res <- apply(avex4, 1, function(x) {
+  #   res <-
+  #     pairwise.wilcox.test(x, g = nl, p.adjust.method = "bonferroni")
+  #   return(c(res$p.value[1, 1], res$p.value[2, 1], res$p.value[2, 2]))
+  # })
+  # wilc.test.res <- data.frame(t(wilc.test.res))
+  # colnames(wilc.test.res) <-
+  #   c("wilcox.p.val.hm", "wilcox.p.val.hp", "wilcox.p.val.pm")
+  # wilc.test.res$wilcox.p.val.hm.fdr <-
+  #   p.adjust(wilc.test.res$wilcox.p.val.hm, method = "fdr")
+  # wilc.test.res$wilcox.p.val.hp.fdr <-
+  #   p.adjust(wilc.test.res$wilcox.p.val.hp, method = "fdr")
+  # wilc.test.res$wilcox.p.val.pm.fdr <-
+  #   p.adjust(wilc.test.res$wilcox.p.val.pm, method = "fdr")
+  # wilc.test.res$gene <- rownames(wilc.test.res)
+  
+  ### t test
+  t.test_res <- apply(avex4, 1, function(x) {
+    res <- pairwise.t.test(x, g = nl, p.adjust.method = "bonferroni")
+    return(c(res$p.value[1, 1], res$p.value[2, 1], res$p.value[2, 2]))
+  })
+  t.test_res <- data.frame(t(t.test_res))
+  colnames(t.test_res) <-
+    c("t.test.p.val.hm", "t.test.p.val.hp", "t.test.p.val.pm")
+  t.test_res$t.test.p.val.hm.fdr <-
+    p.adjust(t.test_res$t.test.p.val.hm, method = "fdr")
+  t.test_res$t.test.p.val.hp.fdr <-
+    p.adjust(t.test_res$t.test.p.val.hp, method = "fdr")
+  t.test_res$t.test.p.val.pm.fdr <-
+    p.adjust(t.test_res$t.test.p.val.pm, method = "fdr")
+  
+  table(t.test_res$t.test.p.val.hm.fdr > 0.05)
+  table(t.test_res$t.test.p.val.hp.fdr > 0.05)
+  table(t.test_res$t.test.p.val.pm.fdr > 0.05)
+  
+  t.test_res$gene <- rownames(t.test_res)
+  
+  avex5 <- merge.data.frame(x =  t.test_res, y= c(  kr.test), by = 'gene', all = T)
+  
+  avex5 <- column_to_rownames(avex5, var = 'gene')
+  avex5$exp_PIG <- rowMeans2(expm1(subset(my_data_subset, species == 'pig')[["RNA_genes"]]@data[rownames(avex5), ]))
+  avex5$exp_HUMAN <- rowMeans2(expm1(subset(my_data_subset, species == 'human')[["RNA_genes"]]@data[rownames(avex5), ]))
+  avex5$exp_MOUSE <- rowMeans2(expm1(subset(my_data_subset, species == 'mouse')[["RNA_genes"]]@data[rownames(avex5), ]))
+  
+  avex5$pct_PIG <- rowSums(subset(my_data_subset, species == 'pig')[["RNA_genes"]]@data[rownames(avex5), ] > 0) / ncol(subset(my_data_subset, species == 'pig')[["RNA_genes"]]@data[rownames(avex5), ] > 0) * 100
+  avex5$pct_HUMAN <- rowSums(subset(my_data_subset, species == 'human')[["RNA_genes"]]@data[rownames(avex5), ] > 0) / ncol(subset(my_data_subset, species == 'human')[["RNA_genes"]]@data[rownames(avex5), ] > 0) * 100
+  avex5$pct_MOUSE <- rowSums(subset(my_data_subset, species == 'mouse')[["RNA_genes"]]@data[rownames(avex5), ] > 0) / ncol(subset(my_data_subset, species == 'mouse')[["RNA_genes"]]@data[rownames(avex5), ] > 0) * 100
+  
+  avex5$gene <- rownames(avex5)
+  rank_test[[i]] <- avex5
+}
+
+write.xlsx(rank_test, 'perc.rank.pairwise.shared.SMC.clusters_categorization.xlsx', overwrite = T)
+
+```
+
+```{r}
+deseq2_res <- readRDS("/faststorage/project/THOR/diana/integration_pigs_with_WT/integrated_pig_mice_hum/closer/more_closer/SMC/after_bengal/cluster_specificity/deseq2.pairwise.shared.SMC.clusters_Elastic_cell_categorization.rds")
+
+
+# Correlation of ranked genes
+avex <- AverageExpression(my_data, assays = 'RNA_genes', group.by = 'orig.ident', slot = 'data')
+
+# Filter out house-keeping genes
+HKG <- intersect(na.omit(deseq2_res$Contractile[deseq2_res$Contractile$HP_padj > 0.05 & 
+             deseq2_res$Contractile$HM_padj > 0.05 &
+           deseq2_res$Contractile$PM_padj > 0.05, 'gene' ]),  
+           
+           c( 
+           
+          na.omit( deseq2_res$Transitional[deseq2_res$Transitional$HP_padj > 0.05 & 
+             deseq2_res$Transitional$HM_padj > 0.05 &
+           deseq2_res$Transitional$PM_padj > 0.05, 'gene']),
+           
+          na.omit( deseq2_res$Terminal[deseq2_res$Terminal$HP_padj > 0.05 & 
+             deseq2_res$Terminal$HM_padj > 0.05 &
+           deseq2_res$Terminal$PM_padj > 0.05, 'gene']) ,
+          
+          na.omit( deseq2_res$Proliferating[deseq2_res$Terminal$HP_padj > 0.05 & 
+             deseq2_res$Proliferating$HM_padj > 0.05 &
+           deseq2_res$Proliferating$PM_padj > 0.05, 'gene']) ))
+           
+
+
+
+
+
+#### loop across clusters
+correl_rank <- list()
+for(i in unique(my_data_balanced$shared_clusters)) {
+  my_data_subset <- my_data_balanced[,my_data_balanced$shared_clusters == i]
+  avex <-
+    AverageExpression(my_data_subset,
+                      assays = 'RNA_genes',
+                      group.by = 'orig.ident',
+                      slot = 'data')
+  
+  avex <- avex[["RNA_genes"]][! rownames(avex[["RNA_genes"]]) %in% HKG, ]
+  #rank data using custom function
+  avex2 <- apply(avex, 2, rank_my)
+  avex2 <- avex2[!(rowMax(avex2) < 0.33),]
+  
+  bca <-
+    as.data.frame.matrix(table(my_data_subset$orig.ident, my_data_subset$species))
+  nl <- apply(bca, 1, function(x)
+    colnames(bca)[which.max(x)])
+  
+  avex_avg <- data.frame(
+    human = rowMeans(avex2[, nl == "human"]),
+    mouse = rowMeans(avex2[, nl == "mouse"]),
+    pig = rowMeans(avex2[, nl == "pig"])
+  )
+
+  # Convert the matrix to a long format data frame
+
+  mat_long <- as.data.frame(cor(avex_avg)) %>%
+    tibble::rownames_to_column(var = "Species1") %>%
+    pivot_longer(cols = -Species1,
+                 names_to = "Species2",
+                 values_to = "Value")
+  mat_long$IsDiagonal <- mat_long$Species1 == mat_long$Species2
+
+  p <- ggplot(mat_long, aes(x = Species1, y = Species2, fill = Value)) +
+  geom_tile(color = "white", aes(alpha = IsDiagonal)) +  # Control tile appearance
+     scale_alpha_manual(values = c(1, 0), guide = "none") +  # Make diagonal tiles fully transparent and remove legend
+  geom_text(data = subset(mat_long, !IsDiagonal),  # Exclude diagonal from text plotting
+            aes(label = sprintf("%.2f", Value)), color = "black", size = 4) +
+  scale_fill_gradientn(colors = colorRampPalette(rev(brewer.pal(9, "PuBuGn")))(100))  +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1),
+        axis.text.y = element_text(angle = 0, hjust = 1)) +
+  labs(title = paste('Shared SMC cluster', i), fill = "Correlation", x = NULL, y = NULL) +
+     geom_text(aes(label = sprintf("%.2f", Value)), color = "black", size = 4)   # Text labels
+  
+   correl_rank[[i]] <- p
+}
+
+p <- plot_grid(plotlist = correl_rank, nrow = 2, ncol = 2, align = 'hv',  axis = 'b', greedy = T, label_fontfamily = 'Helvetica', label_x = -0.1)
+print(p)
+saveRDS(p, 'correlation_shared_SMC_phenotypes_LIST_categorization.rds')
+p <- readRDS("/faststorage/project/THOR/diana/integration_pigs_with_WT/integrated_pig_mice_hum/closer/more_closer/SMC/after_bengal/cluster_specificity/correlation_shared_SMC_phenotypes_LIST.rds")
+
+ggsave(filename = 'correlation_shared_SMC_phenotypes_categorization.pdf',  plot = p, device = 'pdf', units = 'cm', dpi = 400, width = 16, height = 14, scale = 1.5)
+```
+
+
+# To find out markers for species-specific populations, I will go back to individual datasets. Integrated datasets do not have all genes, but only those that are expressed in all 3 species, while it can be important to have genes expressed solely in some species
+
+```{r}
+Idents(my_data) <- 'specificity_category'
+
+tmp <- FindAllMarkers(object = my_data, assay = 'RNA_genes', only.pos = T)
+tmp <- tmp[tmp$p_val_adj < 0.05,]
+
+View(tmp[tmp$cluster == 'mmusculus-specific', c(2,3,4,6,7)]) ## IBSP, PTH1R, MIA, COMP, BMP2
+
+table( my_data$smc_phenotypes ,my_data$specificity_category) 
+```
+
+# UMAPs of the individual datasets with highlighted species-specific and shared clusters (based on barcodes)
+
+
+```{r}
+mouse <- readRDS("/faststorage/project/THOR/diana/integration_pigs_with_WT/integrated_pig_mice_hum/closer/more_closer/mouse/smc_plaque_Alencar_seurat.rds")
+human <-  readRDS("/faststorage/project/THOR/diana/integration_pigs_with_WT/integrated_pig_mice_hum/closer/more_closer/human/athero_comb_smc_seurat.rds")
+pig <- readRDS("/faststorage/project/THOR/diana/integration_pigs_with_WT/Pigs/Pigs_regression/Carlos_new_analysis/SC.Analysis.V4.ThirdPass.RNA.New/SMC/bengal/pig_plaque_seurat.rds")
+```
+
+# Use HE scVI integareted datasets 
+
+```{r}
+dim(mouse) # 2412 cells
+
+mouse$specificity <- rep(NA, length(mouse$orig.ident))
+human$specificity <- rep(NA, length(human$orig.ident))
+pig$specificity <- rep(NA, length(pig$orig.ident))
+
+# all_datasets_el$many_higher_expr_scVI$specificity_category <- my_data$consensus[colnames(all_datasets_el$many_higher_expr_scVI)]
+# all_datasets_el$many_higher_expr_scVI$specificity_category <- factor(all_datasets_el$many_higher_expr_scVI$specificity_category)
+
+# Transfer **shared** cluster to all individual species datasets
+my_vec <-
+      names(all_datasets_el$many_higher_expr_scVI$specificity_category[all_datasets_el$many_higher_expr_scVI$specificity_category == 'Shared']) %>% na.omit()
+    my_vec <- gsub('-mmusculus', replacement = '', x = my_vec)
+    names(my_vec) <- my_vec
+    mouse$specificity <-
+      ifelse(colnames(mouse) %in% names(my_vec), 'Shared', mouse$specificity)
+
+my_vec <-
+      names(all_datasets_el$many_higher_expr_scVI$specificity_category[all_datasets_el$many_higher_expr_scVI$specificity_category == 'Shared']) %>% na.omit()
+    my_vec <- gsub('-hsapiens', replacement = '', x = my_vec)
+    names(my_vec) <- my_vec
+    human$specificity <-
+      ifelse(colnames(human) %in% names(my_vec), 'Shared', human$specificity)
+
+my_vec <-
+      names(all_datasets_el$many_higher_expr_scVI$specificity_category[all_datasets_el$many_higher_expr_scVI$specificity_category == 'Shared']) %>% na.omit()
+    my_vec <- gsub('-sscrofa', replacement = '', x = my_vec)
+    names(my_vec) <- my_vec
+    pig$specificity <-
+      ifelse(colnames(pig) %in% names(my_vec), 'Shared', pig$specificity)
+        
+# **hsapiens-sscrofa-specific**
+    
+my_vec <-
+      names(all_datasets_el$many_higher_expr_scVI$specificity_category[all_datasets_el$many_higher_expr_scVI$specificity_category == 'Human_pig_specific']) %>% na.omit()
+    my_vec <- gsub('-hsapiens', replacement = '', x = my_vec)
+    names(my_vec) <- my_vec
+    human$specificity <-
+      ifelse(colnames(human) %in% names(my_vec), 'Human_pig_specific', human$specificity)
+
+my_vec <-
+      names(all_datasets_el$many_higher_expr_scVI$specificity_category[all_datasets_el$many_higher_expr_scVI$specificity_category == 'Human_pig_specific']) %>% na.omit()
+    my_vec <- gsub('-sscrofa', replacement = '', x = my_vec)
+    names(my_vec) <- my_vec
+    pig$specificity <-
+      ifelse(colnames(pig) %in% names(my_vec), 'Human_pig_specific', pig$specificity)
+
+my_vec <-
+      names(all_datasets_el$many_higher_expr_scVI$specificity_category[all_datasets_el$many_higher_expr_scVI$specificity_category == 'Human_pig_specific']) %>% na.omit()
+    my_vec <- gsub('-mmusculus', replacement = '', x = my_vec)
+    names(my_vec) <- my_vec
+    mouse$specificity <-
+      ifelse(colnames(mouse) %in% names(my_vec), 'Human_pig_specific', mouse$specificity)
+    
+    
+# mmusculus-specific
+my_vec <-
+      names(all_datasets_el$many_higher_expr_scVI$specificity_category[all_datasets_el$many_higher_expr_scVI$specificity_category == 'Mouse_specific']) %>% na.omit()
+    my_vec <- gsub('-mmusculus', replacement = '', x = my_vec)
+    names(my_vec) <- my_vec
+    mouse$specificity <-
+      ifelse(colnames(mouse) %in% names(my_vec), 'Mouse_specific', mouse$specificity) # Mouse contractile cells contribute to hsapiens-sscrofa-specific
+    
+my_vec <-
+      names(all_datasets_el$many_higher_expr_scVI$specificity_category[all_datasets_el$many_higher_expr_scVI$specificity_category == 'Mouse_specific']) %>% na.omit()
+    my_vec <- gsub('-hsapiens', replacement = '', x = my_vec)
+    names(my_vec) <- my_vec
+    human$specificity <-
+      ifelse(colnames(human) %in% names(my_vec), 'Mouse_specific', human$specificity)
+
+my_vec <-
+      names(all_datasets_el$many_higher_expr_scVI$specificity_category[all_datasets_el$many_higher_expr_scVI$specificity_category == 'Mouse_specific']) %>% na.omit()
+    my_vec <- gsub('-sscrofa', replacement = '', x = my_vec)
+    names(my_vec) <- my_vec
+    pig$specificity <-
+      ifelse(colnames(pig) %in% names(my_vec), 'Mouse_specific', pig$specificity)
+    
+    
+    
+    
+# hsapiens-specific
+my_vec <-
+      names(all_datasets_el$many_higher_expr_scVI$specificity_category[all_datasets_el$many_higher_expr_scVI$specificity_category == 'Human_specific']) %>% na.omit()
+    my_vec <- gsub('-hsapiens', replacement = '', x = my_vec)
+    names(my_vec) <- my_vec
+    human$specificity <-
+      ifelse(colnames(human) %in% names(my_vec), 'Human_specific', human$specificity)
+
+my_vec <-
+      names(all_datasets_el$many_higher_expr_scVI$specificity_category[all_datasets_el$many_higher_expr_scVI$specificity_category == 'Human_specific']) %>% na.omit()
+    my_vec <- gsub('-sscrofa', replacement = '', x = my_vec)
+    names(my_vec) <- my_vec
+    pig$specificity <-
+      ifelse(colnames(pig) %in% names(my_vec), 'Human_specific', pig$specificity)
+
+my_vec <-
+      names(all_datasets_el$many_higher_expr_scVI$specificity_category[all_datasets_el$many_higher_expr_scVI$specificity_category == 'Human_specific']) %>% na.omit()
+    my_vec <- gsub('-mmusculus', replacement = '', x = my_vec)
+    names(my_vec) <- my_vec
+    mouse$specificity <-
+      ifelse(colnames(mouse) %in% names(my_vec), 'Human_specific', mouse$specificity) 
+    
+# **Mouse_human_specific**
+my_vec <-
+      names(all_datasets_el$many_higher_expr_scVI$specificity_category[all_datasets_el$many_higher_expr_scVI$specificity_category == 'Mouse_human_specific']) %>% na.omit()
+    my_vec <- gsub('-hsapiens', replacement = '', x = my_vec)
+    names(my_vec) <- my_vec
+    human$specificity <-
+      ifelse(colnames(human) %in% names(my_vec), 'Mouse_human_specific', human$specificity)
+
+my_vec <-
+      names(all_datasets_el$many_higher_expr_scVI$specificity_category[all_datasets_el$many_higher_expr_scVI$specificity_category == 'Mouse_human_specific']) %>% na.omit()
+    my_vec <- gsub('-mmusculus', replacement = '', x = my_vec)
+    names(my_vec) <- my_vec
+    mouse$specificity <-
+      ifelse(colnames(mouse) %in% names(my_vec), 'Mouse_human_specific', mouse$specificity)
+
+my_vec <-
+      names(all_datasets_el$many_higher_expr_scVI$specificity_category[all_datasets_el$many_higher_expr_scVI$specificity_category == 'Mouse_human_specific']) %>% na.omit()
+    my_vec <- gsub('-sscrofa', replacement = '', x = my_vec)
+    names(my_vec) <- my_vec
+    pig$specificity <-
+      ifelse(colnames(pig) %in% names(my_vec), 'Mouse_human_specific', pig$specificity)
+    
+    
+# Non significant
+my_vec <-
+      names(all_datasets_el$many_higher_expr_scVI$specificity_category[all_datasets_el$many_higher_expr_scVI$specificity_category == 'NS']) %>% na.omit()
+    my_vec <- gsub('-hsapiens', replacement = '', x = my_vec)
+    names(my_vec) <- my_vec
+    human$specificity <-
+      ifelse(colnames(human) %in% names(my_vec), 'Small_contribution', human$specificity)
+
+my_vec <-
+      names(all_datasets_el$many_higher_expr_scVI$specificity_category[all_datasets_el$many_higher_expr_scVI$specificity_category == 'NS']) %>% na.omit()
+    my_vec <- gsub('-mmusculus', replacement = '', x = my_vec)
+    names(my_vec) <- my_vec
+    mouse$specificity <-
+      ifelse(colnames(mouse) %in% names(my_vec), 'Small_contribution', mouse$specificity)
+    
+my_vec <-
+      names(all_datasets_el$many_higher_expr_scVI$specificity_category[all_datasets_el$many_higher_expr_scVI$specificity_category == 'NS']) %>% na.omit()
+    my_vec <- gsub('-sscrofa', replacement = '', x = my_vec)
+    names(my_vec) <- my_vec
+    pig$specificity <-
+      ifelse(colnames(pig) %in% names(my_vec), 'Small_contribution', pig$specificity)
+```
+
+```{r}
+saveRDS(list(Mouse = mouse$specificity, Human = human$specificity, Pig = pig$specificity), file = 'vector_of_specificity.rds')
+```
+
+```{r}
+my_data <- readRDS("/faststorage/project/THOR/diana/integration_pigs_with_WT/integrated_pig_mice_hum/closer/more_closer/SMC/after_bengal/cluster_specificity/HE_RPCA_cell_categorization.rds")
+```
+
+
+```{r}
+pal_species <- readRDS("/faststorage/project/THOR/diana/integration_pigs_with_WT/integrated_pig_mice_hum/closer/more_closer/SMC/after_bengal/cluster_specificity/pal_species.rds")
+
+# plots smc_phenotypes + specificIty on individual datasets
+# pal_specificity <- met.brewer(name = 'Cross', n = 9, direction = -1)
+# pal_specificity <-
+#   c(
+#     met.brewer(
+#       name = 'Cross',
+#       n = 9,
+#       direction = -1
+#     )[c(5, 9)],
+#     "#20854EFF",
+#     "#00A087FF",
+#     met.brewer(
+#       name = 'Demuth',
+#       n = 8,
+#       direction = -1
+#     )[c(4, 3, 2, 7)],
+#     "#7876B1FF"
+#   )
+
+# Example of a nice 9-color palette in R
+# Example 9-color palette, slightly brighter
+# Combine 3-step purple gradient + 6 NPG-inspired colors
+pal_specificity <- c('#C1C8D9', '#8491B4df',  '#4f576c',
+  # 3 purples in a gradient
+  # "#CBD5E1",  # light gray-blue
+  # "#94A3B8",  # medium gray-blue
+  # "#64748B",  # darker gray-blue
+  pal_npg("nrc")(10)[c(1,2,3,10,5,7,8,9)]
+  # 6 colors adapted from an NPG-like palette
+ #  "#E64B35",  # vivid red
+ #  "#4DBBD5",  # teal
+ #  "#00A087",  # greenish-teal
+ # "#FFDC91FF", 
+ #  "#F39B7F",  # peach/orange
+ #  "#7E6148"   # subdued brown
+)
+
+
+# "#E64B35FF" "#4DBBD5FF" "#00A087FF" "#3C5488FF" "#F39B7FFF" "#8491B4FF"
+# pal_specificity <- c( "#CBD5E1",  # light gray-blue
+#   "#94A3B8",  # medium gray-blue
+#   "#64748B", brewer.pal(n = 9, name = 'Paired' )[3:9]) 
+
+
+names(pal_specificity) <- c('Contractile', 'Transitional', 'Terminal',  'Pericytes_Human_pig_specific', 'DLX5_SMC_Human_specific','Terminal_Mouse_specific', 'Proliferating', 'Contractile_Human_pig_specific',   'Too_small_cluster')
+
+pal_celltypes_pig <- c("#E18727FF", "#0072B5FF",  "#BC3C29FF", "#20854EFF", "#7876B1FF" ,"#FFDC91FF", "#EE4C97FF")
+
+pal_celltypes_human <- c("#0072B5FF", "#BC3C29FF" ,"#E18727FF", "#80796BFF", "#20854EFF",  "#374E55FF")
+
+pal_celltypes_mouse <- c("#E18727FF","#BC3C29FF",  "#0072B5FF", "#79AF97FF")
+
+
+mouse$smc_phenotypes_specificity <- paste(mouse$smc_phenotypes, mouse$specificity, sep = '_') # Mouse Contractile and Contractile_Rgs5 contribure to pig-human contractile, but too little in comparison with human and pig
+
+human$smc_phenotypes_specificity <- paste(human$smc_phenotypes, human$specificity, sep = '_')
+pig$smc_phenotypes_specificity <- paste(pig$smc_phenotypes, pig$specificity, sep = '_')
+
+my_vec <- c('Contractile_Human_pig_specific', 'DLX5_SMC_Human_specific', 'Pericytes_Human_pig_specific', 'Terminal_Mouse_specific')
+mouse$for_heatmap <- ifelse(mouse$smc_phenotypes_specificity %in% my_vec, mouse$smc_phenotypes_specificity, 'Shared')
+pig$for_heatmap <- ifelse(pig$smc_phenotypes_specificity %in% my_vec, pig$smc_phenotypes_specificity, 'Shared')
+human$for_heatmap <- ifelse(human$smc_phenotypes_specificity %in% my_vec, human$smc_phenotypes_specificity, 'Shared')
+
+## Divide 'Shared' into sub-phenotypes
+head(colnames(mouse))
+head(colnames(human))
+head(colnames(pig))
+
+#Mouse
+xxx <- my_data[, my_data$species == 'mouse']$shared_clusters 
+names(xxx) <-  substr(names(xxx), start = 1, stop = 16)
+xxx <- xxx[substr(colnames(mouse), start = 1, stop = 16)]
+names(xxx) <- colnames(mouse)
+mouse$shared_clusters <- xxx
+mouse$shared_clusters <- as.character(mouse$shared_clusters)
+mouse$shared_clusters[is.na(mouse$shared_clusters)] <- 'specific'
+table(mouse$shared_clusters, mouse$smc_phenotypes)
+
+mouse$shared_clusters <- ifelse(mouse$shared_clusters == 'specific', mouse$specificity, no = mouse$shared_clusters)
+mouse$shared_clusters[mouse$shared_clusters == 'Mouse_specific'] <- 'Terminal_Mouse_specific'
+mouse$shared_clusters[mouse$shared_clusters == 'Human_pig_specific'] <- 'Contractile_Human_pig_specific'
+
+# Pig
+xxx <- my_data[, my_data$species == 'pig']$shared_clusters 
+names(xxx) <-  substr(names(xxx), start = 1, stop = 16)
+xxx <- xxx[substr(colnames(pig), start = 1, stop = 16)]
+names(xxx) <- colnames(pig)
+pig$shared_clusters <- xxx
+pig$shared_clusters <- as.character(pig$shared_clusters)
+pig$shared_clusters[is.na(pig$shared_clusters)] <- 'specific'
+table(pig$shared_clusters, pig$smc_phenotypes)
+
+pig$shared_clusters <- ifelse(pig$shared_clusters == 'specific', pig$specificity, no = pig$shared_clusters)
+pig$shared_clusters[pig$smc_phenotypes == 'Pericytes'] <- 'Pericytes_Human_pig_specific' 
+pig$shared_clusters[pig$shared_clusters == 'Human_pig_specific'] <- 'Contractile_Human_pig_specific' 
+pig$shared_clusters[pig$shared_clusters == 'Mouse_specific'] <- 'Terminal_Mouse_specific' 
+table(pig$shared_clusters)
+table(pig$shared_clusters, pig$smc_phenotypes)
+
+# Human
+xxx <- my_data[, my_data$species == 'human']$shared_clusters 
+names(xxx) <-  substr(names(xxx), start = 12, stop = 27)
+xxx <- xxx[substr(colnames(human), start = 12, stop = 27)]
+names(xxx) <- colnames(human)
+human$shared_clusters <- xxx
+human$shared_clusters <- as.character(human$shared_clusters)
+human$shared_clusters[is.na(human$shared_clusters)] <- 'specific'
+table(human$shared_clusters, human$smc_phenotypes)
+
+human$shared_clusters <- ifelse(human$shared_clusters == 'specific', human$specificity, no = human$shared_clusters)
+human$shared_clusters[human$smc_phenotypes == 'Pericytes'] <- 'Pericytes_Human_pig_specific' 
+human$shared_clusters[human$shared_clusters == 'Human_pig_specific'] <- 'Contractile_Human_pig_specific' 
+human$shared_clusters[human$shared_clusters == 'Human_specific'] <- 'DLX5_SMC_Human_specific'
+human$shared_clusters[is.na(human$shared_clusters)==TRUE] <- 'Too_small_cluster'
+table(human$shared_clusters)
+table(human$shared_clusters, human$smc_phenotypes)
+
+
+##### Mouse
+spec_mouse = DimPlot_scCustom(
+  mouse,
+    reduction = 'umap',
+    group.by = c('shared_clusters'),
+    pt.size = 0.5,
+    shuffle = TRUE, label = T, label.box = T,  colors_use = pal_specificity, repel = T, label.size = 2.7
+  ) + 
+    theme(legend.position = 'none') +
+   text_sizes + theme(plot.title = element_blank()) + 
+    # guides(color = guide_legend(nrow = 3)) +
+  #    plot_annotation(title =  new_names[name]) +  
+  # theme(text = element_text(size = 10)) +
+      scale_color_manual(values = pal_specificity) + 
+  theme(aspect.ratio = 1,
+      axis.line = element_blank(),
+      axis.text.y = element_blank(),
+      axis.ticks = element_blank(),
+      axis.text.x = element_blank(),
+      axis.title.x = element_blank(),
+      axis.title.y = element_blank()
+    )
+  
+  
+  smc_mouse = DimPlot_scCustom(mouse,
+    reduction = 'umap',
+    group.by = 'smc_phenotypes',
+    pt.size = 0.5,
+    shuffle = TRUE, label = T, label.box = T, colors_use = pal_celltypes_mouse, repel = T, label.size = 2.7
+  ) + NoLegend()+
+    # guides(color = guide_legend(nrow = 6)) +
+    # theme(legend.position = 'none', legend.text = element_text(size = 9)) +  
+    theme(plot.title = element_blank()) + 
+    scale_color_manual(values = pal_celltypes_mouse) +
+    theme(aspect.ratio = 1,
+      axis.line = element_blank(),
+      axis.text.y = element_blank(),
+      axis.ticks = element_blank(),
+      axis.text.x = element_blank(),
+      axis.title.x = element_blank(),
+      axis.title.y = element_blank()
+    )
+
+##### Pig
+spec_pig = DimPlot_scCustom(
+  pig,
+    reduction = 'umap',
+    group.by = c('shared_clusters'),
+    pt.size = 0.5,
+    shuffle = TRUE, label = T, label.box = T,  colors_use = pal_specificity, repel = T, label.size = 2.7
+  ) + 
+    theme(legend.position = 'none') +
+   text_sizes + theme(plot.title = element_blank()) + 
+    # guides(color = guide_legend(nrow = 3)) +
+  #    plot_annotation(title =  new_names[name]) +  
+  # theme(text = element_text(size = 10)) +
+      scale_color_manual(values = pal_specificity) + 
+  theme(aspect.ratio = 1,
+      axis.line = element_blank(),
+      axis.text.y = element_blank(),
+      axis.ticks = element_blank(),
+      axis.text.x = element_blank(),
+      axis.title.x = element_blank(),
+      axis.title.y = element_blank()
+    )
+  
+  
+  smc_pig = DimPlot_scCustom(pig,
+    reduction = 'umap',
+    group.by = 'smc_phenotypes',
+    pt.size = 0.5,
+    shuffle = TRUE, label = T, label.box = T, colors_use = pal_celltypes_pig, repel = T, label.size = 2.7
+  ) + NoLegend()+
+    # guides(color = guide_legend(nrow = 6)) +
+    # theme(legend.position = 'none', legend.text = element_text(size = 9)) +  
+    theme(plot.title = element_blank()) + 
+    scale_color_manual(values = pal_celltypes_pig) +
+    theme(aspect.ratio = 1,
+      axis.line = element_blank(),
+      axis.text.y = element_blank(),
+      axis.ticks = element_blank(),
+      axis.text.x = element_blank(),
+      axis.title.x = element_blank(),
+      axis.title.y = element_blank()
+    )
+###### Human
+spec_human = DimPlot_scCustom(
+  human,
+    reduction = 'umap',
+    group.by = c('shared_clusters'),
+    pt.size = 0.5,
+    shuffle = TRUE, label = T, label.box = T,  colors_use = pal_specificity, repel = T, label.size = 2.7
+  ) + 
+    theme(legend.position = 'none') +
+   text_sizes + theme(plot.title = element_blank()) + 
+    # guides(color = guide_legend(nrow = 3)) +
+  #    plot_annotation(title =  new_names[name]) +  
+  # theme(text = element_text(size = 10)) +
+      scale_color_manual(values = pal_specificity) + 
+  theme(aspect.ratio = 1,
+      axis.line = element_blank(),
+      axis.text.y = element_blank(),
+      axis.ticks = element_blank(),
+      axis.text.x = element_blank(),
+      axis.title.x = element_blank(),
+      axis.title.y = element_blank()
+    )
+  
+  
+  smc_human = DimPlot_scCustom(human,
+    reduction = 'umap',
+    group.by = 'smc_phenotypes',
+    pt.size = 0.5,
+    shuffle = TRUE, label = T, label.box = T, colors_use = pal_celltypes_human, repel = T, label.size = 2.7
+  ) + NoLegend()+
+    # guides(color = guide_legend(nrow = 6)) +
+    # theme(legend.position = 'none', legend.text = element_text(size = 9)) +  
+    theme(plot.title = element_blank()) + 
+    scale_color_manual(values = pal_celltypes_human) +
+    theme(aspect.ratio = 1,
+      axis.line = element_blank(),
+      axis.text.y = element_blank(),
+      axis.ticks = element_blank(),
+      axis.text.x = element_blank(),
+      axis.title.x = element_blank(),
+      axis.title.y = element_blank()
+    )
+#### Combine
+
+fig = ggdraw() +
+  draw_plot(spec_mouse, x = 0.0, y = 0, width = .33, height = .48) +
+  draw_plot(smc_mouse , x = 0.0, y = 0.5, width = .33, height = .48 )  +
+  draw_plot_label(label = 'Mouse SMCs', size = 12,
+                  x = c(-0.01), y = c(1.005), family = 'Helvetica')  +
+  draw_plot(spec_pig, x = 0.34, y = 0, width = .34, height = .48) +
+  draw_plot(smc_pig , x = 0.34, y = 0.5, width = .34 , height =  .48)  +
+  draw_plot_label(label = 'Pig SMCs', size = 12,
+                  x = c(0.4), y = c(1.005), family = 'Helvetica')  +
+  draw_plot(spec_human, x = 0.65, y = 0, width = .34, height = .48) +
+  draw_plot(smc_human , x = 0.65, y = .5 , width = .34 , height = .48 )  +
+  draw_plot_label(label = 'Human SMCs', size = 12,
+                  x = c(0.65), y = c(1.005), family = 'Helvetica')  
+
+fig
+saveRDS(fig, file = 'UMAPS_individual_ds_species_specific_clusters_category.rds')
+
+
+ggsave(filename = 'UMAPS_individual_ds_species_specific_clusters_category.pdf',  plot = fig, device = 'pdf', units = 'cm', dpi = 400, width = 8, height = 4, scale = 3)  
+
+DimPlot(mouse, group.by = 'specificity') + DimPlot(human, group.by = 'specificity') + DimPlot(pig, group.by = 'specificity')
+my_vec %in% colnames(mouse) %>% table()
+```
+
+```{r}
+# Marker identification for cross-species SMC phenotypes mapping
+Idents(pig) <- 'shared_clusters'
+tmp_p <- FindAllMarkers(pig, assay = 'RNA', only.pos = T)
+openxlsx::write.xlsx(x = tmp_p, file = 'pig_elastic_unified_markers.xlsx')
+
+Idents(human) <- 'shared_clusters'
+tmp_h <- FindAllMarkers(human, assay = 'RNA', only.pos = T)
+openxlsx::write.xlsx(x = tmp_h, file = 'human_elastic_unified_markers.xlsx')
+
+Idents(mouse) <- 'shared_clusters'
+tmp_m <- FindAllMarkers(mouse, assay = 'RNA', only.pos = T)
+openxlsx::write.xlsx(x = tmp_m, file = 'mouse_elastic_unified_markers.xlsx')
+
+Idents(pig) <- 'smc_phenotypes'
+tmp_p <- FindAllMarkers(pig, assay = 'RNA', only.pos = T)
+openxlsx::write.xlsx(x = tmp_p, file = 'pig_elastic_ind_markers.xlsx')
+
+Idents(human) <- 'smc_phenotypes'
+tmp_h <- FindAllMarkers(human, assay = 'RNA', only.pos = T)
+openxlsx::write.xlsx(x = tmp_h, file = 'human_elastic_ind_markers.xlsx')
+
+Idents(mouse) <- 'smc_phenotypes'
+tmp_m <- FindAllMarkers(mouse, assay = 'RNA', only.pos = T)
+openxlsx::write.xlsx(x = tmp_m, file = 'mouse_elastic_ind_markers.xlsx')
+
+
+
+```
+
+```{r}
+FeaturePlot_scCustom(pig, features = c('SERPINF1'))
+FeaturePlot_scCustom(human, features = c('SERPINF1'))
+FeaturePlot_scCustom(mouse, features = c('Serpinf1'))
+
+FeaturePlot_scCustom(pig, features = c('TNFRSF11B'))
+FeaturePlot_scCustom(human, features = c('TNFRSF11B'))
+FeaturePlot_scCustom(mouse, features = c('Tnfrsf11b'))
+```
+
+# Marker identification for species-specific SMC phenotypes
+To do for: mouse terminal, human DLX5, human-pig pericytes and contractile SMCs. Visualize expression to check specificity of markers for other datasets
+
+# Mouse-specific terminal SMCs. Going back to mouse individual dataset. 
+
+```{r}
+Idents(mouse) <- 'specificity'
+
+term_markers <- multiMarkerStats(
+    wilcox=findMarkers(as.SingleCellExperiment(mouse), test="wilcox", direction="up",group = mouse$specificity, add.summary = TRUE),
+    binom=findMarkers(as.SingleCellExperiment(mouse), test="binom", direction="up",group = mouse$specificity, add.summary = TRUE), sorted = TRUE
+)
+
+term_markers <- term_markers@listData[["Mouse-specific"]] %>% as.matrix() %>% as.data.frame()
+term_markers <- term_markers[term_markers$wilcox.summary.AUC > 0.7,]
+term_markers <- term_markers[order(term_markers$binom.summary.logFC, decreasing = T),] 
+term_markers$gene <- rownames(term_markers)
+
+
+# tmp_mouse <- FindAllMarkers(object = mouse, assay = 'RNA', test.use = 'roc', only.pos = T)
+# tmp_mouse <- tmp_mouse[tmp_mouse$cluster == 'Mouse-specific', ]
+Idents(mouse) <- 'specificity'
+tmp_mouse <- FindAllMarkers(object = mouse, assay = 'RNA', test.use = 'MAST', only.pos = T)
+tmp_mouse <- tmp_mouse[tmp_mouse$cluster == 'Mouse-specific', ]
+```
+
+# Human DLX5_SMCs. Majority of the cluster cells are placed specifically as unique human cells, so I will find markers for DLX5_SMCs cluster
+
+```{r}
+table(human$smc_phenotypes, human$specificity)
+
+Idents(human) <- 'smc_phenotypes'
+
+dlx5_markers <- multiMarkerStats(
+    wilcox=findMarkers(as.SingleCellExperiment(human), test="wilcox", direction="up",group = human$smc_phenotypes, add.summary = TRUE),
+    binom=findMarkers(as.SingleCellExperiment(human), test="binom", direction="up",group = human$smc_phenotypes, add.summary = TRUE), sorted = TRUE
+)
+
+dlx5_markers <- dlx5_markers@listData[["DLX5_SMC"]] %>% as.matrix() %>% as.data.frame()
+dlx5_markers <- dlx5_markers[dlx5_markers$wilcox.summary.AUC > 0.7,]
+dlx5_markers <- dlx5_markers[order(dlx5_markers$binom.summary.logFC, decreasing = T),] 
+dlx5_markers$gene <- rownames(dlx5_markers)
+
+
+# dlx5_markers <- FindAllMarkers(object = human, assay = 'RNA', test.use = 'roc', only.pos = T)
+# dlx5_markers <- dlx5_markers[dlx5_markers$cluster == 'DLX5_SMC',]
+
+dlx5_markers <- FindAllMarkers(object = human, assay = 'RNA', test.use = 'MAST', only.pos = T)
+dlx5_markers <- dlx5_markers[dlx5_markers$cluster == 'DLX5_SMC',]
+```
+
+# Human-pig specific pericytes. Find common markers
+
+```{r}
+Idents(human) <- 'smc_phenotypes'
+
+PC_markers <- multiMarkerStats(
+    wilcox=findMarkers(as.SingleCellExperiment(human), test="wilcox", direction="up",group = human$smc_phenotypes, add.summary = TRUE),
+    binom=findMarkers(as.SingleCellExperiment(human), test="binom", direction="up",group = human$smc_phenotypes, add.summary = TRUE), sorted = TRUE
+)
+
+PC_markers <- PC_markers@listData[["Pericytes"]] %>% as.matrix() %>% as.data.frame()
+PC_markers <- PC_markers[PC_markers$wilcox.summary.AUC > 0.7,]
+PC_markers <- PC_markers[order(PC_markers$binom.summary.logFC, decreasing = T),] 
+colnames(PC_markers) <- paste('Human', colnames(PC_markers), sep = '_')
+PC_markers$gene <- rownames(PC_markers)
+
+# PC_markers <- FindAllMarkers(object = human, assay = 'RNA',  only.pos = T)
+# PC_markers <- PC_markers[PC_markers$cluster == 'Pericytes',]
+# colnames(PC_markers)[1:6] <- paste('Human', colnames(PC_markers)[1:6], sep = '_')
+
+# PC_markers <- FindAllMarkers(object = human, assay = 'RNA',  only.pos = T, test.use = 'MAST')
+# PC_markers <- PC_markers[PC_markers$cluster == 'Pericytes',]
+# colnames(PC_markers)[1:6] <- paste('Human', colnames(PC_markers)[1:6], sep = '_')
+
+
+Idents(pig) <- 'smc_phenotypes'
+PC_markers_pig <- multiMarkerStats(
+    wilcox=findMarkers(as.SingleCellExperiment(pig), test="wilcox", direction="up",group = pig$smc_phenotypes, add.summary = TRUE),
+    binom=findMarkers(as.SingleCellExperiment(pig), test="binom", direction="up",group = pig$smc_phenotypes, add.summary = TRUE), sorted = TRUE
+)
+
+PC_markers_pig <- PC_markers_pig@listData[["Pericytes"]] %>% as.matrix() %>% as.data.frame()
+PC_markers_pig <- PC_markers_pig[PC_markers_pig$wilcox.summary.AUC > 0.7,]
+PC_markers_pig <- PC_markers_pig[order(PC_markers_pig$binom.summary.logFC, decreasing = T),] 
+colnames(PC_markers_pig) <- paste('Pig', colnames(PC_markers_pig), sep = '_')
+PC_markers_pig$gene <- rownames(PC_markers_pig)
+
+# PC_markers_pig <- FindAllMarkers(object = pig, assay = 'RNA',  only.pos = T)
+# PC_markers_pig <- PC_markers_pig[PC_markers_pig$cluster == 'Pericytes',]
+# colnames(PC_markers_pig)[1:6] <- paste('Pig', colnames(PC_markers_pig)[1:6], sep = '_')
+# PC_markers_pig <- PC_markers_pig[PC_markers_pig$Pig_p_val_adj < 0.05,]
+
+# PC_markers_pig <- FindAllMarkers(object = pig, assay = 'RNA',  only.pos = T, test.use = 'MAST')
+# PC_markers_pig <- PC_markers_pig[PC_markers_pig$cluster == 'Pericytes',]
+# colnames(PC_markers_pig)[1:6] <- paste('Pig', colnames(PC_markers_pig)[1:6], sep = '_')
+
+
+PC_markers_HP <- merge.data.frame(x = PC_markers, y = PC_markers_pig, by = 'gene')
+```
+
+# Human-pig specific contractile SMCs. Not all contractile SMCs are pig-human specific. Some of them are common between the species. I will split cSMCs and find markers only for human-pig specific ones
+
+
+```{r}
+table(human$smc_phenotypes, human$specificity)
+table(pig$smc_phenotypes, pig$specificity)
+
+human$smc_phenotypes_specificity <- paste(human$smc_phenotypes, human$specificity, sep = '_')
+pig$smc_phenotypes_specificity <- paste(pig$smc_phenotypes, pig$specificity, sep = '_')
+
+Idents(human) <- 'smc_phenotypes_specificity'
+PC_markers <- multiMarkerStats(
+    wilcox=findMarkers(as.SingleCellExperiment(human), test="wilcox", direction="up",group = human$smc_phenotypes_specificity, add.summary = TRUE),
+    binom=findMarkers(as.SingleCellExperiment(human), test="binom", direction="up",group = human$smc_phenotypes_specificity, add.summary = TRUE), sorted = TRUE
+)
+
+PC_markers <- PC_markers@listData[["Contractile_Human-pig-specific"]] %>% as.matrix() %>% as.data.frame()
+PC_markers <- PC_markers[PC_markers$wilcox.summary.AUC > 0.7,]
+PC_markers <- PC_markers[order(PC_markers$binom.summary.logFC, decreasing = T),] 
+colnames(PC_markers) <- paste('Human', colnames(PC_markers), sep = '_')
+PC_markers$gene <- rownames(PC_markers)
+
+# PC_markers <- FindAllMarkers(object = human, assay = 'RNA', test.use = 'roc', only.pos = T)
+# PC_markers <- PC_markers[PC_markers$cluster == 'Contractile_Human-pig-specific',]
+# colnames(PC_markers)[1:6] <- paste('Human', colnames(PC_markers)[1:6], sep = '_')
+
+
+####### MAST
+Idents(human) <- 'smc_phenotypes_specificity'
+PC_markers <- FindAllMarkers(object = human, assay = 'RNA', test.use = 'MAST', only.pos = T)
+PC_markers <- PC_markers[PC_markers$cluster == 'Contractile_Human-pig-specific',]
+colnames(PC_markers)[1:6] <- paste('Human', colnames(PC_markers)[1:6], sep = '_')
+
+###############################
+Idents(pig) <- 'smc_phenotypes_specificity'
+PC_markers_pig <- multiMarkerStats(
+    wilcox=findMarkers(as.SingleCellExperiment(pig), test="wilcox", direction="up",group = pig$smc_phenotypes_specificity, add.summary = TRUE),
+    binom=findMarkers(as.SingleCellExperiment(pig), test="binom", direction="up",group = pig$smc_phenotypes_specificity, add.summary = TRUE), sorted = TRUE
+)
+
+PC_markers_pig <- PC_markers_pig@listData[["Contractile_Human-pig-specific"]] %>% as.matrix() %>% as.data.frame()
+PC_markers_pig <- PC_markers_pig[PC_markers_pig$wilcox.summary.AUC > 0.7,]
+PC_markers_pig <- PC_markers_pig[order(PC_markers_pig$binom.summary.logFC, decreasing = T),] 
+colnames(PC_markers_pig) <- paste('Pig', colnames(PC_markers_pig), sep = '_')
+PC_markers_pig$gene <- rownames(PC_markers_pig)
+
+# PC_markers_pig <- FindAllMarkers(object = pig, assay = 'RNA', test.use = 'roc', only.pos = T)
+# PC_markers_pig <- PC_markers_pig[PC_markers_pig$cluster == 'Contractile_Human-pig-specific',]
+# colnames(PC_markers_pig)[1:6] <- paste('Pig', colnames(PC_markers_pig)[1:6], sep = '_')
+
+
+####### MAST
+Idents(pig) <- 'smc_phenotypes_specificity'
+PC_markers_pig <- FindAllMarkers(object = pig, assay = 'RNA', test.use = 'MAST', only.pos = T)
+PC_markers_pig <- PC_markers_pig[PC_markers_pig$cluster == 'Contractile_Human-pig-specific',]
+colnames(PC_markers_pig)[1:6] <- paste('Pig', colnames(PC_markers_pig)[1:6], sep = '_')
+
+cSMC_markers_HP <- merge.data.frame(x = PC_markers, y = PC_markers_pig, by = 'gene')
+```
+
+```{r}
+species_markers <- list('Mouse terminal' = term_markers, 
+                        'Human DLX5' = dlx5_markers,
+                        'Human-pig pericytes' = PC_markers_HP,
+                        'Human-pig cSMCs' = cSMC_markers_HP)
+saveRDS(species_markers, file = 'df_markers_species_specific_clusters_scran.rds')
+openxlsx::write.xlsx(species_markers, file = "Markers_species_specific_clusters_scran.xlsx",
+                     asTable = TRUE, overwrite = TRUE)
+
+# species_markers <- list('Mouse terminal' = tmp_mouse, 
+#                         'Human DLX5' = dlx5_markers,
+#                         'Human-pig pericytes' = PC_markers_HP,
+#                         'Human-pig cSMCs' = cSMC_markers_HP)
+# saveRDS(species_markers, file = 'df_markers_species_specific_clusters_MAST.rds')
+# openxlsx::write.xlsx(species_markers, file = "Markers_species_specific_clusters_MAST.xlsx",
+#                      asTable = TRUE, overwrite = TRUE)
+```
+
+# Visualization of markers for species-specific clusters. 
+
+Make one-to-one orthologs, but keep features that are not expressed in other species
+
+```{r}
+species_markers <- readRDS("/faststorage/project/THOR/diana/integration_pigs_with_WT/integrated_pig_mice_hum/closer/more_closer/SMC/after_bengal/cluster_specificity/df_markers_species_specific_clusters.rds") # or _scran with binom mode
+DefaultAssay(mouse) <- 'RNA'
+DefaultAssay(pig) <- 'RNA'
+DefaultAssay(human) <- 'RNA'
+
+# mouse$specificity <- ifelse(is.na(mouse$specificity) == T, 'Other', mouse$specificity)
+# pig$specificity <- ifelse(is.na(pig$specificity) == T, 'Other', pig$specificity)
+# human$specificity <- ifelse(is.na(human$specificity) == T, 'Other', human$specificity)
+# 
+# mouse$specificity <- ifelse(mouse$specificity == 'Shared', 'shared', mouse$specificity)
+# pig$specificity <- ifelse(pig$specificity == 'Shared', 'shared', pig$specificity)
+# human$specificity <- ifelse(human$specificity == 'Shared', 'shared', human$specificity)
+
+
+mouse$smc_phenotypes_specificity <- paste(mouse$smc_phenotypes, mouse$specificity, sep = '_')
+human$smc_phenotypes_specificity <- paste(human$smc_phenotypes, human$specificity, sep = '_')
+pig$smc_phenotypes_specificity <- paste(pig$smc_phenotypes, pig$specificity, sep = '_')
+
+my_vec <- c('Contractile_Human_pig_specific', 'DLX5_SMC_Human_specific', 'Pericytes_Human_pig_specific', 'Terminal_Mouse_specific')
+mouse$for_heatmap <- ifelse(mouse$smc_phenotypes_specificity %in% my_vec, mouse$smc_phenotypes_specificity, 'Mouse_rest')
+pig$for_heatmap <- ifelse(pig$smc_phenotypes_specificity %in% my_vec, pig$smc_phenotypes_specificity, 'Pig_rest')
+human$for_heatmap <- ifelse(human$smc_phenotypes_specificity %in% my_vec, human$smc_phenotypes_specificity, 'Human_rest')
+```
+
+```{r}
+final_species_genes <- readRDS("/faststorage/project/THOR/diana/integration_pigs_with_WT/integrated_pig_mice_hum/closer/more_closer/biomart_109_orth_new.rds")
+final_species_genes$Human_gene_name_v98 <- ifelse(is.na(final_species_genes$Human_gene_name_v98) == TRUE, final_species_genes$`Human Ensembl ID`, final_species_genes$Human_gene_name_v98)
+final_species_genes$Human_gene_name_v98 <- ifelse(final_species_genes$Human_gene_name_v98 == '', final_species_genes$`Human Ensembl ID`, final_species_genes$Human_gene_name_v98)
+
+final_species_genes[nrow(final_species_genes)+1,'Human_gene_name_v98' ] <- 'CST3'
+final_species_genes[nrow(final_species_genes),'Human Ensembl ID' ] <- 'CST3'
+final_species_genes[nrow(final_species_genes),'mouse_origin' ] <- 'Cst3'
+final_species_genes[nrow(final_species_genes),'pig_origin' ] <- 'CST3'
+
+final_species_genes[nrow(final_species_genes)+1,'Human_gene_name_v98' ] <- 'BGLAP'
+final_species_genes[nrow(final_species_genes),'Human Ensembl ID' ]  <- 'BGLAP'
+final_species_genes[nrow(final_species_genes),'mouse_origin' ] <- 'Bglap'
+final_species_genes[nrow(final_species_genes),'pig_origin' ] <- 'BGLAP'
+
+
+final_species_genes[nrow(final_species_genes)+1,'Human_gene_name_v98' ] <- 'COL9A3'
+final_species_genes[nrow(final_species_genes),'Human Ensembl ID' ] <-  'COL9A3'
+final_species_genes[nrow(final_species_genes),'mouse_origin' ] <- 'Col9a3'
+final_species_genes[nrow(final_species_genes),'pig_origin' ] <- 'COL9A3'
+```
+
+```{r}
+DefaultAssay(mouse) <- 'RNA' 
+mouse_2 <- mouse
+
+# Counts
+counts_all <- GetAssayData(object = mouse_2, slot = "counts", assay = 'RNA')
+my_df <- data.frame(old=rownames(mouse_2), ##create a dataframe of correspondence
+                    old_2=rownames(mouse_2),
+                    original = rownames(mouse_2))
+rownames(my_df) <- rownames(mouse_2)
+
+colnames(my_df)[2] <- 'mouse_origin' # Mouse_Gene_Names_v99
+
+table(my_df$mouse_origin %in% final_species_genes$mouse_origin)
+final_species_genes$scRnaseq_mouse <- final_species_genes$mouse_origin %in% my_df$original
+mouse_unique <-  my_df$original[!my_df$original %in% final_species_genes$mouse_origin]
+my_df_2 <- merge(my_df,final_species_genes,by="mouse_origin")  ## merging data about mouse dataset genes and ortholog table, Mouse_Gene_Names_v99
+my_df_2$human_fin <- ifelse(is.na(my_df_2$`Human Ensembl ID`) == TRUE, my_df_2$`Human Ensembl ID`, my_df_2$Human_gene_name_v98)
+rownames(my_df_2) <- my_df_2$original
+my_df_2['Cst3', 'human_fin'] <- 'CST3'
+filtered_counts_h <- counts_all[my_df_2$original, ] ## keep only genes that have orthologous
+rownames(filtered_counts_h) <- my_df_2$human_fin
+mouse_2@assays$RNA@counts <- filtered_counts_h
+
+# Data
+counts_all <- GetAssayData(object = mouse_2, slot = "data", assay = 'RNA')
+my_df <- data.frame(old=rownames(mouse_2), ##create a dataframe of correspondence
+                    old_2=rownames(mouse_2),
+                    original = rownames(mouse_2))
+rownames(my_df) <- rownames(mouse_2)
+
+colnames(my_df)[2] <- 'mouse_origin' # Mouse_Gene_Names_v99
+
+table(my_df$mouse_origin %in% final_species_genes$mouse_origin)
+final_species_genes$scRnaseq_mouse <- final_species_genes$mouse_origin %in% my_df$original
+mouse_unique <-  my_df$original[!my_df$original %in% final_species_genes$mouse_origin]
+my_df_2 <- merge(my_df,final_species_genes,by="mouse_origin")  ## merging data about mouse dataset genes and ortholog table, Mouse_Gene_Names_v99
+my_df_2$human_fin <- ifelse(is.na(my_df_2$`Human Ensembl ID`) == TRUE, my_df_2$`Human Ensembl ID`, my_df_2$Human_gene_name_v98)
+rownames(my_df_2) <- my_df_2$original
+my_df_2['Cst3', 'human_fin'] <- 'CST3'
+filtered_counts_h <- counts_all[my_df_2$original, ] ## keep only genes that have orthologous
+rownames(filtered_counts_h) <- my_df_2$human_fin
+mouse_2@assays$RNA@data <- filtered_counts_h
+
+```
+
+
+```{r}
+DefaultAssay(pig) <- 'RNA' 
+pig_2 <- pig
+
+# Counts
+DefaultAssay(pig_2) <- 'RNA' 
+counts_all <- GetAssayData(object = pig_2, slot = "counts", assay = 'RNA')
+my_df <- data.frame(old=rownames(pig_2), ##create a dataframe of correspondence
+                    old_2=rownames(pig_2),
+                    original = rownames(pig_2))
+rownames(my_df) <- rownames(pig_2)
+colnames(my_df)[2] <- 'pig_origin' # Pig gene name
+final_species_genes$scRnaseq_pig_2 <- final_species_genes$pig_origin %in% my_df$pig_origin
+my_df_2 <- merge(my_df,final_species_genes,by=c('pig_origin'))  ## merging data about mouse dataset genes and ortholog table, Pig gene name
+my_df_2$human_fin <- ifelse(is.na(my_df_2$Human_gene_name_v98) == TRUE, my_df_2$`Human Ensembl ID`, my_df_2$Human_gene_name_v98)
+rownames(my_df_2) <- my_df_2$original
+my_df_2['CST3', 'human_fin'] <- 'CST3'
+filtered_counts_h <- counts_all[my_df_2$original, ] ## keep only genes that have orthologous
+rownames(filtered_counts_h) <- my_df_2$human_fin
+pig_2@assays$RNA@counts <- filtered_counts_h
+
+# Data
+DefaultAssay(pig_2) <- 'RNA' 
+counts_all <- GetAssayData(object = pig, slot = "data", assay = 'RNA')
+my_df <- data.frame(old=rownames(pig_2), ##create a dataframe of correspondence
+                    old_2=rownames(pig_2),
+                    original = rownames(pig_2))
+rownames(my_df) <- rownames(pig_2)
+colnames(my_df)[2] <- 'pig_origin' # Pig gene name
+final_species_genes$scRnaseq_pig_2 <- final_species_genes$pig_origin %in% my_df$pig_origin
+my_df_2 <- merge(my_df,final_species_genes,by=c('pig_origin'))  ## merging data about mouse dataset genes and ortholog table, Pig gene name
+my_df_2$human_fin <- ifelse(is.na(my_df_2$Human_gene_name_v98) == TRUE, my_df_2$`Human Ensembl ID`, my_df_2$Human_gene_name_v98)
+rownames(my_df_2) <- my_df_2$original
+my_df_2['CST3', 'human_fin'] <- 'CST3'
+filtered_counts_h <- counts_all[my_df_2$original, ] ## keep only genes that have orthologous
+rownames(filtered_counts_h) <- my_df_2$human_fin
+pig_2@assays$RNA@data <- filtered_counts_h
+```
+
+
+
+```{r}
+human_2 <-  human[, sample(colnames(human), size = 2500, replace = F)]
+pig_2 <-  pig_2[, sample(colnames(pig_2), size = 2500, replace = F)]
+merged <- Merge_Seurat_List(list_seurat = list(mouse_2, pig_2, human_2), merge.data = T)
+saveRDS(merged, file = 'merged_pig_human_mouse_smcs.rds')
+
+
+merged <- readRDS("/faststorage/project/THOR/diana/integration_pigs_with_WT/integrated_pig_mice_hum/closer/more_closer/SMC/after_bengal/cluster_specificity/merged_pig_human_mouse_smcs.rds")
+my_data <- readRDS("/faststorage/project/THOR/diana/integration_pigs_with_WT/integrated_pig_mice_hum/closer/more_closer/SMC/after_bengal/cluster_specificity/HE_RPCA_cell_categorization.rds") # reclustered shared clusters
+
+
+# We need to devide 'rest categories' to shared phenotypes
+merged$for_heatmap <- factor(merged$for_heatmap)
+xxx <- my_data$shared_clusters 
+
+names(xxx) <-  substr(names(xxx), start = 1, stop = 16)
+xxx <- xxx[substr(colnames(merged), start = 2, stop = 17)]
+names(xxx) <- colnames(merged)
+merged$shared_clusters <- xxx
+merged$shared_clusters <- as.character(merged$shared_clusters)
+merged$shared_clusters[is.na(merged$shared_clusters)] <- 'specific'
+table(merged$shared_clusters, merged$for_heatmap)
+
+merged$for_heatmap <-
+  factor(merged$for_heatmap, levels = 
+    c(
+      "DLX5_SMC_Human_specific",
+      "Pericytes_Human_pig_specific",
+      'Contractile_Human_pig_specific',
+       "Terminal_Mouse_specific",
+      'Human_rest',
+      'Pig_rest',
+      'Mouse_rest'
+    
+  ))
+
+merged$xxx <- paste(merged$shared_clusters, merged$for_heatmap, sep = '_')
+
+merged$xxx <- ifelse(merged$xxx %in% c('Contractile_Human_rest', 'Contractile_Pig_rest', 'Contractile_Mouse_rest', 'specific_Mouse_rest'), 'Contractile_shared', merged$xxx) # because mouse contractile cells contribute to pig-uman contractile cluster, but too little, technically theu are just shared contractile
+merged$xxx <- ifelse(merged$xxx %in% c('Transitional_Human_rest', 'Transitional_Pig_rest', 'Transitional_Mouse_rest'), 'Transitional_shared', merged$xxx )
+merged$xxx <- ifelse(merged$xxx %in% c('Terminal_Human_rest', 'Terminal_Pig_rest', 'Terminal_Mouse_rest'), 'Terminal_shared', merged$xxx )
+merged$xxx <- ifelse(merged$xxx %in% c('Proliferating_Human_rest', 'Proliferating_Pig_rest', 'Proliferating_Mouse_rest'), 'Proliferating_shared', merged$xxx )
+table(merged$xxx)
+
+# names(merged$xxx[merged$xxx == 'Terminal_shared'])
+merged$for_heatmap_2 <- merged$for_heatmap
+merged$for_heatmap_2 <- as.character(merged$for_heatmap_2)
+merged$for_heatmap_2[names(merged$xxx[merged$xxx == 'Terminal_shared'])] <- 'Terminal_shared'
+merged$for_heatmap_2[names(merged$xxx[merged$xxx == 'Contractile_shared'])] <- 'Contractile_shared'
+merged$for_heatmap_2[names(merged$xxx[merged$xxx == 'Transitional_shared'])] <- 'Transitional_shared'
+merged$for_heatmap_2[names(merged$xxx[merged$xxx == 'Proliferating_shared'])] <- 'Proliferating_shared'
+
+table(merged$for_heatmap_2, merged$smc_phenotypes) # 
+table(merged$for_heatmap_2)
+
+
+
+merged <- merged[,merged$for_heatmap_2 %in%  c(
+      "DLX5_SMC_Human_specific",
+      "Pericytes_Human_pig_specific",
+      'Contractile_Human_pig_specific',
+       "Terminal_Mouse_specific",
+      'Contractile_shared',
+      'Transitional_shared',
+      'Terminal_shared',
+      'Proliferating_shared')]
+
+#### Make heatmap
+Idents(merged) <- 'for_heatmap_2'
+
+
+merged$for_heatmap_2 <-
+  factor(merged$for_heatmap_2, levels = 
+    c(
+      "DLX5_SMC_Human_specific",
+      "Pericytes_Human_pig_specific",
+      'Contractile_Human_pig_specific',
+       "Terminal_Mouse_specific",
+      'Contractile_shared',
+      'Transitional_shared',
+      'Terminal_shared',
+     'Proliferating_shared' ))
+
+
+saveRDS(merged, file = 'merged_for_heatmap.rds')
+
+# tmp_mouse_1 <- FindAllMarkers(object = merged, assay = 'RNA', test.use = 'roc',  only.pos = T, max.cells.per.ident = 3000, logfc.threshold = 0.1, min.diff.pct = 0.01, min.pct = 0.1)
+merged <- readRDS("~/THOR/diana/integration_pigs_with_WT/integrated_pig_mice_hum/closer/more_closer/SMC/after_bengal/cluster_specificity/merged_for_heatmap.rds")
+tmp_mouse <- FindAllMarkers(object = merged, assay = 'RNA',  min.pct = 0.3, only.pos = T, max.cells.per.ident = 3000, min.diff.pct = 0.2)
+
+top_markers <- c()
+for (i in unique(tmp_mouse$cluster)[c(8,7, 5, 4, 3,2,1,6)]){
+  top_markers <- c(top_markers, head((subset(tmp_mouse, subset = tmp_mouse$cluster == i)[order(subset(tmp_mouse, subset = tmp_mouse$cluster == i)$avg_log2FC, decreasing = T),])$gene, 7))
+}
+top_markers[6] <- 'MYH10'
+top_markers[22] <- 'COL2A1'
+top_markers[42] <- 'LUM'
+top_markers[5] <- 'MSX2'
+top_markers[21] <- 'ACTG2'
+top_markers[13] <- 'GJA4'
+top_markers[14] <- 'RGS5'
+top_markers[29] <- 'ACTA2'
+top_markers[30] <- 'ITGA8'
+top_markers[45] <- 'COL1A2'
+# species_markers <- readRDS("/faststorage/project/THOR/diana/integration_pigs_with_WT/integrated_pig_mice_hum/closer/more_closer/SMC/after_bengal/cluster_specificity/df_markers_species_specific_clusters_scran.rds")
+# 
+# top_markers <- c()
+# for (i in names(species_markers)[c(2,3,4,1)]){
+#   my_col <- colnames(species_markers[[i]])[ grep('Top', colnames(species_markers[[i]]))][1]
+#   top_markers <- c(top_markers, species_markers[[i]][order(species_markers[[i]][,my_col], decreasing = F), 'gene'][1:10])
+# }
+
+p1 <- DotPlot(
+  merged,
+  features = toupper(unique(top_markers)),
+  assay = 'RNA',
+  scale = T,
+  group.by = 'for_heatmap_2'
+) + 
+  # ggtitle('Top markers for SMC phenotypes pig aorta plaque') + 
+  # coord_flip() +
+  # RotatedAxis() + 
+  scale_colour_gradientn(name = 'log2 (count + 1)',colours = rev(brewer.pal(n = 11, name = "RdBu")))  +
+  theme_bw() + theme(legend.position = 'bottom') +
+  theme(axis.line  = element_blank()) +
+  theme(axis.text.x = element_text(
+    angle = 90,
+    vjust = 0.5,
+    hjust = 1
+  )) +
+  ylab('') +
+  theme(axis.ticks = element_blank()) 
+print(p1)
+
+
+ggsave(filename = 'dotplot_merged_species-specific_clusters_6.pdf', plot = p1, device = 'pdf', width = 9.5, height = 2.9, units = 'cm', scale = 3)
+```
+
+```{r}
+# For enrichment analysis
+table(merged$for_heatmap_2)
+Idents(merged) <- 'for_heatmap_2'
+tmp <- FindAllMarkers(merged, assay = 'RNA', only.pos = T)
+saveRDS(tmp, 'markers_for_enrichment.rds')
+
+
+```
+
+
+```{r}
+# terminal
+feats <- species_markers$`Mouse terminal`[1:12, 'gene']
+
+FeaturePlot_scCustom(mouse, features = feats) + plot_annotation(title = 'Mouse SMCs') 
+
+FeaturePlot_scCustom(pig, features = str_to_upper(feats) )+ plot_annotation(title = 'Pig SMCs') 
+
+FeaturePlot_scCustom(human, features = str_to_upper(feats)) + plot_annotation(title = 'Human SMCs') 
+
+# DLX5 human specific
+feats <- c(species_markers$`Human DLX5`[1:12, 'gene'], 'MECOM',  'ID3')
+
+# Pericytes
+feats <- c(species_markers$`Human-pig pericytes`[species_markers$`Human-pig pericytes`$Human_pct.2 < 0.5 & species_markers$`Human-pig pericytes`$Pig_pct.2 < 0.5, 'gene'], 'Gucy1b3', 'Filip1')
+
+# cSMCs
+feats <- c(species_markers$`Human-pig cSMCs`[, 'gene'], )
+
+FeaturePlot_scCustom(mouse, features = str_to_title(feats)  ) + plot_annotation(title = 'Mouse SMCs') 
+
+FeaturePlot_scCustom(pig, features = str_to_upper(feats) )+ plot_annotation(title = 'Pig SMCs') 
+
+FeaturePlot_scCustom(human, features = str_to_upper(feats)) + plot_annotation(title = 'Human SMCs') 
+```
+
+```{r}
+my_data <- all_datasets$many_higher_expr_seuratRPCA
+DefaultAssay(my_data) <- 'RNA_genes'
+
+ddr <- c("ABL1", "ABRAXAS1", "ACTB", "ACTL6A", "ACTL6B", "ACTR2", "ACTR5", "ACTR8", "ANKLE1", "AP5S1", "AP5Z1", "APLF", "ARID1A", "ARID1B", "ARID2", "ATM", "ATP23", "ATR", "ATRIP", "AUNIP", "BABAM1", "BABAM2", "BCL7A", "BCL7B", "BCL7C", "BLM", "BRCA1", "BRCA2", "BRCC3", "BRD7", "BRD8", "BRIP1", "BRME1", "C14orf39", "C1QBP", "CDC45", "CDC7", "CDCA5", "CGAS", "CHD4", "CHEK1", "CHEK2", "CIB1", "CREBBP", "CSNK2A1", "CSNK2A2", "CYREN", "DCLRE1A", "DCLRE1B", "DCLRE1C", "DDX1", "DDX11", "DEK", "DMAP1", "DMC1", "DNA2", "DNTT", "DPF1", "DPF2", "DPF3", "DTX3L", "EID3", "EME1", "EME2", "EP400", "EPC1", "EPC2", "ERCC1", "ERCC4", "ERCC5", "ERCC6", "ERCC8", "ESCO2", "EXD2", "EYA1", "EYA3", "FAN1", "FANCB", "FANCD2", "FANCM", "FBH1", "FEN1", "FIGNL1", "FMN2", "FOXM1", "FUS", "GEN1", "GGN", "GINS2", "GINS4", "H2AX", "HDGFL2", "HELB", "HELQ", "HMCES", "HMGA2", "HMGB1", "HMGB2", "HPF1", "HSF1", "HSF2BP", "HTATSF1", "HUS1", "HUS1B", "IFFO1", "ING3", "INIP", "INO80", "INTS3", "KASH5", "KAT5", "KDM1A", "KDM2A", "KDM4D", "KHDC3L", "KLHL15", "KMT5A", "KMT5B", "KMT5C", "LIG3", "LIG4", "MAD2L2", "MAGEF1", "MAJIN", "MARF1", "MBTD1", "MCM2", "MCM3", "MCM4", "MCM5", "MCM6", "MCM7", "MCM8", "MCM9", "MCMDC2", "MEAF6", "MEIOB", "MEIOC", "MGMT", "MIR221", "MLH1", "MMS22L", "MORF4L1", "MORF4L2", "MPND", "MRE11", "MRGBP", "MRNIP", "MSH2", "MTA1", "MUS81", "NABP1", "NABP2", "NBN", "NHEJ1", "NIPBL", "NSD2", "NSMCE1", "NSMCE2", "NSMCE3", "NSMCE4A", "NUCKS1", "NUDT16L1", "OGG1", "OOEP", "OTUB1", "OTUB2", "PALB2", "PARP1", "PARP2", "PARP3", "PARP9", "PARPBP", "PAXX", "PBRM1", "PELI1", "PHF10", "PIAS4", "PLK1", "PML", "PNKP", "POGZ", "POLA1", "POLB", "POLL", "POLM", "POLN", "POLQ", "POT1", "PPP4C", "PPP4R2", "PPP4R3B", "PPP5C", "PRDM9", "PRKDC", "PRMT1", "PRPF19", "PSMD14", "RAD21", "RAD21L1", "RAD50", "RAD51", "RAD51AP1", "RAD51B", "RAD51C", "RAD51D", "RAD52", "RAD54B", "RAD54L", "RADX", "RBBP8", "REC8", "RECQL", "RECQL4", "RECQL5", "REV3L", "RFWD3", "RHNO1", "RIF1", "RMI1", "RMI2", "RNF126", "RNF138", "RNF168", "RNF169", "RNF8", "RPA1", "RPA2", "RPA3", "RPA4", "RTEL1", "RUVBL1", "RUVBL2", "SAMHD1", "SENP3", "SETD2", "SETMAR", "SETX", "SFPQ", "SFR1", "SHLD1", "SHLD2", "SHLD3", "SIRT1", "SIRT6", "SKP2", "SLF1", "SLF2", "SLX1A", "SLX1B", "SLX4", "SMARCA2", "SMARCA4", "SMARCAD1", "SMARCAL1", "SMARCB1", "SMARCC1", "SMARCC2", "SMARCD1", "SMARCD2", "SMARCD3", "SMARCE1", "SMC5", "SMC6", "SMCHD1", "SPIDR", "SPIRE1", "SPIRE2", "SPO11", "SWI5", "SWSAP1", "TDP1", "TDP2", "TENT4A", "TERB1", "TERB2", "TERF2IP", "TEX15", "TFIP11", "TIMELESS", "TNKS1BP1", "TONSL", "TOP2B", "TOP3A", "TOPBP1", "TP53", "TP53BP1", "TRIP13", "TRRAP", "TWIST1", "UBE2N", "UBE2V2", "UBQLN4", "UHRF1", "UIMC1", "USP51", "UVRAG", "VCP", "VPS72", "WAS", "WDR48", "WRAP53", "WRN", "XRCC1", "XRCC2", "XRCC3", "XRCC4", "XRCC5", "XRCC6", "YEATS4", "YY1", "ZBTB7A", "ZCWPW1", "ZFYVE26", "ZGRF1", "ZMYND8", "ZNF365", 
+         "ZSWIM7")
+
+ros <- c("ABCC1", "ATOX1", "CAT", "CDKN2D", "EGLN2", "ERCC2", "FES", "FTL", "G6PD", "GCLC", "GCLM", "GLRX", "GLRX2", "GPX3", "GPX4", "GSR", "HHEX", "HMOX2", "IPCEF1", "JUNB", "LAMTOR5", "LSP1", "MBP", "MGST1", "MPO", "MSRA", "NDUFA6", "NDUFB4", "NDUFS2", "NQO1", "OXSR1", "PDLIM1", "PFKP", "PRDX1", "PRDX2", "PRDX4", "PRDX6", "PRNP", "PTPA", "SBNO2", "SCAF4", "SELENOS", "SOD1", "SOD2", "SRXN1", "STK25", "TXN", "TXNRD1", "TXNRD2")
+
+
+
+my_data <- AddModuleScore(
+  object = my_data,
+  features = list(ros),
+  ctrl = 200,assay = 'RNA_genes', seed = 1984, name = 'ROS')
+  
+
+p <- FeaturePlot_scCustom(
+  seurat_object = my_data,
+  features = 'ROS1',
+  order = F,
+  split.by = 'species', pt.size = 1, na_cutoff = 0, colors_use =  viridis_magma_dark_high) & NoAxes() & theme(aspect.ratio = 1)
+
+
+
+p
+ggsave(filename = 'ROS_species_split.pdf', device = 'pdf',plot = p, width = 10, height = 
+         3, scale = 1.2)
+
+p <- DimPlot_scCustom(
+    seurat_object = my_data,
+    reduction = 'umap',
+    group.by = 'smc_phenotypes',
+    pt.size = 1,
+    shuffle = TRUE,
+    # label = T,
+    # label.box = T,
+    colors_use = pal_celltypes_all,
+    # repel = T,
+    # label.size = 5
+  ) +  
+    theme(plot.title = element_blank()) + 
+    scale_color_manual(values = pal_celltypes_all) +
+    theme(
+      axis.line = element_blank(),
+      axis.text.y = element_blank(),
+      axis.ticks = element_blank(),
+      axis.text.x = element_blank(),
+      axis.title.x = element_blank(),
+      axis.title.y = element_blank(),
+      text =  element_text(family = "Helvetica")
+    )& theme(legend.background = element_rect(fill = "transparent"),
+             legend.box.background = element_rect(fill = "transparent"),
+             panel.background = element_rect(fill = "transparent"),
+             panel.grid.major = element_blank(),
+             panel.grid.minor = element_blank(),
+             plot.background = element_rect(fill = "transparent",
+                                            color = NA)) & theme(aspect.ratio = 1)
+
+
+
+p
+ggsave(filename = 'HE_RPCA_SMC_phenotypes.pdf', device = 'pdf',plot = p, width = 3, height = 
+         2, scale = 2)
+```
+
+
+```{r}
+human$is_pericytes <- ifelse(human$smc_phenotypes == 'Pericytes', 'Pericytes', 'Non-pericytes')
+Idents(human) <- 'is_pericytes'
+PC_markers <- FindAllMarkers(object = human, assay = 'RNA', test.use = 'roc')
+PC_markers <- PC_markers[PC_markers$cluster == 'Pericytes',]
+
+sum(mouse@assays$RNA@data['Cd200',] > 0) / dim(mouse)[2] 
+
+sum(human@assays$RNA@data['CD200',] > 0) / dim(human)[2] 
+
+sum(pig@assays$RNA@data['CD200',] > 0) / dim(pig)[2] 
+
+p1 <- FeaturePlot_scCustom(mouse, features = 'Cd200',order = F) 
+p2 <- FeaturePlot_scCustom(pig, features = 'CD200',order = F) 
+p3 <- FeaturePlot_scCustom(human, features = 'CD200',order = F) 
+
+ggdraw() +
+  draw_plot(p1, x = 0.0, y = 0, width = .33, height = .48) +
+  draw_plot_label(label = 'Mouse SMCs, 86%', size = 12,
+                  x = c(-0.01), y = c(0.5), family = 'Helvetica')  +
+  
+  draw_plot(p2, x = 0.34, y = 0, width = .34, height = .48) +
+ 
+  draw_plot_label(label = 'Pig SMCs, 33%', size = 12,
+                  x = c(0.3), y = c(0.5), family = 'Helvetica')  +
+  draw_plot(p3, x = 0.65, y = 0, width = .34, height = .48) +
+ 
+  draw_plot_label(label = 'Human SMCs, 28%', size = 12,
+                  x = c(0.6), y = c(0.5), family = 'Helvetica')  
+```

@@ -1,0 +1,37 @@
+# Singularity containers
+*.sif
+
+# Data files
+*.h5ad
+*.rds
+
+# R session files
+*.Rhistory
+.RData
+.Rproj.user
+
+# Claude Code config
+CLAUDE.md
+
+# Rendered notebook HTML
+*.nb.html
+
+# Nextflow runtime
+.nextflow/
+.nextflow.log*
+work/
+report*.html
+
+# BENGAL results (too large for git)
+**/results/
+
+# BENGAL pipeline — external tool, only our configs/metadata are tracked
+# Ignore everything inside BENGAL/, then whitelist config + metadata
+2_bengal/BENGAL/*
+!2_bengal/BENGAL/config/
+2_bengal/BENGAL/config/example.config
+!2_bengal/BENGAL/mph_metadata_nf.tsv
+!2_bengal/BENGAL/mph_metadata_coronaries.tsv
+!2_bengal/BENGAL/homology_tbl_bengal_sscrofa.rds
+!2_bengal/BENGAL/mart_bengal_sscrofa.rds
+!2_bengal/BENGAL/avail_attributes_bengal_sscrofa.rds

@@ -1,0 +1,1518 @@
+---
+title: "Running SCENIC"
+subtitle: SCENIC (Single Cell rEgulatory Network Inference and Clustering)
+output:
+  pdf_document:
+    toc: yes
+  html_notebook:
+    toc: yes
+  html_document:
+    number_sections: no
+    toc: yes
+    toc_float: yes
+    css: corrected
+    results: hold
+vignette: >
+  %\VignetteIndexEntry{Running SCENIC} 
+  %\VignetteEncoding{UTF-8}
+  %\VignetteEngine{knitr::rmarkdown} 
+---
+
+
+
+
+```{r setup, echo=FALSE, message=FALSE, warning=FALSE}
+# Suppress loading messages when building the HTML
+suppressPackageStartupMessages({
+  library(SCENIC)
+  library(AUCell)
+  library(RcisTarget)
+  library(Seurat)
+  library(tidyverse)
+  library(openxlsx)
+  library(GENIE3)
+  library(doParallel)
+  library(doRNG)
+  library(KernSmooth)
+  library(RColorBrewer)
+  library(reshape2)
+  library(pheatmap)
+  library(moduleColor)
+  library(ggsankey)
+  library(networkD3)
+  library(ggfortify)
+})
+
+options(width=200)
+
+# To build a personalized report, update this working directory:
+knitr::opts_knit$set(root.dir="/faststorage/project/THOR/diana/integration_pigs_with_WT/integrated_pig_mice_hum/closer/SCENIC_human_carotids") 
+setwd("/faststorage/project/THOR/diana/integration_pigs_with_WT/integrated_pig_mice_hum/closer/SCENIC_human_carotids")
+```
+
+*Vignette built on `r format(Sys.time(), "%b %d, %Y")` with SCENIC **version `r packageVersion("SCENIC")`***.
+
+# SCENIC workflow
+
+This tutorial goes through the steps in the **SCENIC workflow**:
+
+Building the **gene regulatory network (GRN)**: 
+
+1. Identify potential targets for each TF based on co-expression.
+- Filtering the expression matrix and running GENIE3/GRNBoost. 
+- Formatting the targets from GENIE3/GRNBoost into co-expression modules. 
+
+2.  Select potential direct-binding targets (regulons) based on DNA-motif analysis (*RcisTarget*: TF motif analysis) 
+
+Identify **cell states** and their regulators:
+
+3. Analyzing the network activity in each individual cell (*AUCell*)
+- Scoring regulons in the cells (calculate AUC)
+- Optional: Convert the network activity into ON/OFF (binary activity matrix)
+
+4. Identify stable cell states based on their gene regulatory network activity (cell clustering) and exploring the results...
+
+To start this tutorial you should have read the "Introduction and setup" vignette (`vignette("SCENIC_Setup")`) and run the setup steps.
+
+## Command list
+
+Overview of the main commands used to run the SCENIC workflow. 
+To be used as cheatsheet or template (it is not exhaustive). They are explained in the following sections.
+
+
+
+```{r, fig.width=10}
+human_elastic_plaques_counts_s_RNA <-  readRDS("/faststorage/project/THOR/diana/integration_pigs_with_WT/integrated_pig_mice_hum/closer/more_closer/human/athero_comb_smc_seurat.rds")
+
+# human_elastic_plaques_counts_s_RNA <- human_elastic_plaques_counts_s
+# human_elastic_plaques_counts_s_RNA@assays$integrated <- NULL
+# human_elastic_plaques_counts_s_RNA <- NormalizeData(human_elastic_plaques_counts_s_RNA, verbose = FALSE)
+# human_elastic_plaques_counts_s_RNA <- FindVariableFeatures(human_elastic_plaques_counts_s_RNA, selection.method = "vst", nfeatures = 2000)
+# human_elastic_plaques_counts_s_RNA <- ScaleData(human_elastic_plaques_counts_s_RNA, vars.to.regress = "percent_mito")
+# human_elastic_plaques_counts_s_RNA <- RunPCA(human_elastic_plaques_counts_s_RNA, verbose = FALSE)
+# human_elastic_plaques_counts_s_RNA <- RunUMAP(human_elastic_plaques_counts_s_RNA, dims = 1:30, verbose = FALSE)
+# human_elastic_plaques_counts_s_RNA <- FindNeighbors(human_elastic_plaques_counts_s_RNA, dims = 1:30, verbose = FALSE)
+# human_elastic_plaques_counts_s_RNA <- FindClusters(human_elastic_plaques_counts_s_RNA, verbose = FALSE, resolution = 0.3)
+# 
+# DimPlot(human_elastic_plaques_counts_s_RNA, group.by = 'dataset_author') + DimPlot(human_elastic_plaques_counts_s_RNA, group.by = 'sample_id')+
+# DimPlot(human_elastic_plaques_counts_s_RNA, group.by = 'cluster_name_2')
+
+```
+
+```{r, fig.width=10}
+DimPlot(human_elastic_plaques_counts_s, group.by = 'dataset_author') + DimPlot(human_elastic_plaques_counts_s, group.by = 'sample_id')
+DimPlot(human_elastic_plaques_counts_s, group.by = 'cluster_name_2')
+
+```
+
+
+
+```{r}
+table(human_elastic_plaques_counts_s$sample_id, human_elastic_plaques_counts_s$cluster_name_2)
+```
+
+
+```{r}
+Idents(human_elastic_plaques_counts_s) <- 'cluster_name_2'
+marker_list <- list()
+for(i in levels(human_elastic_plaques_counts_s$cluster_name_2)){
+  tmp <- FindMarkers(human_elastic_plaques_counts_s, ident.1 =  i, 
+                     assay = 'RNA', logfc.threshold = 0.25)
+  tmp <- tmp[tmp$p_val_adj < 0.05, ]
+  marker_list[[i]] <- tmp
+  #xlsx::write.xlsx(tmp, file = "human_carotids_beforeSCENIC.xlsx",
+  #                 sheetName = paste0("Cluster_", i), 
+  #                 col.names = TRUE, row.names = TRUE, append = TRUE)
+}
+marker_list <- map(marker_list, ~ rownames_to_column(.x, var = "GeneName"))
+openxlsx::write.xlsx(marker_list, file = "human_carotids_beforeSCENIC.xlsx", 
+                     asTable = TRUE, overwrite = TRUE)
+
+```
+
+```{r}
+Idents(human_elastic_plaques_counts_s) <- 'cluster_name_2'
+marker_list <- list()
+for(i in levels(human_elastic_plaques_counts_s$cluster_name_2)){
+  tmp <- FindMarkers(human_elastic_plaques_counts_s, ident.1 =  i, 
+                     assay = 'RNA', logfc.threshold = 0.25, test.use = 'roc')
+  tmp <- tmp[tmp$p_val_adj < 0.05, ]
+  marker_list[[i]] <- tmp
+  #xlsx::write.xlsx(tmp, file = "human_carotids_beforeSCENIC.xlsx",
+  #                 sheetName = paste0("Cluster_", i), 
+  #                 col.names = TRUE, row.names = TRUE, append = TRUE)
+}
+marker_list <- map(marker_list, ~ rownames_to_column(.x, var = "GeneName"))
+openxlsx::write.xlsx(marker_list, file = "human_carotids_beforeSCENIC_roc.xlsx", 
+                     asTable = TRUE, overwrite = TRUE)
+```
+
+
+I think i will use both clasterization : cluster_name_2  while we use metacells
+
+We need to construct metacells to reduce matrix sparsity and decrease the noise ---
+  NEED TO EXCLUDE GSM3819863BUT I DO NOT WANT TO -- COMING BACK TO NORMAL SCENIC
+
+
+
+
+```{r}
+dim(human_elastic_plaques_counts_s)
+```
+
+
+
+
+
+
+```{r eval=FALSE}
+### Load data
+#loomPath <- system.file(package="SCENIC", "examples/mouseBrain_toy.loom")
+#library(SCopeLoomR)
+#library(loomR)
+#loom <- open_loom(loomPath, mode="r")
+#loom <- loomR::connect(loomPath, mode = "r+")
+##
+
+#exprMat <- GetAssayData(SMC_aorta, slot = 'counts', assay = 'RNA' )
+#cellInfo <- data.frame(seuratCluster=Idents(SMC_aorta))
+#colnames(cellInfo) <- 'CellType'
+#cellInfo$CellType <- as.character(cellInfo$CellType)
+
+#pig_int <- subset(SMC_pigmicehum_plaque_elastic_hg, orig.ident == 'PCSK9_pigs_aorta')
+DefaultAssay(human_elastic_plaques_counts_s) <- 'RNA'
+Idents(human_elastic_plaques_counts_s) <- 'cluster_name_2'
+cellInfo <- data.frame(seuratCluster=Idents(human_elastic_plaques_counts_s))
+colnames(cellInfo) <- 'CellType'
+cellInfo$CellType <- as.character(cellInfo$CellType) 
+#exprMat1 <- subset(exprMat, colnames(exprMat) %in% colnames(pig_int))
+#a <- colnames(exprMat) %in% colnames(pig_int)
+#exprMat1 <- exprMat[, a]
+exprMat <- GetAssayData(human_elastic_plaques_counts_s, slot = 'counts', assay = 'RNA')
+```
+
+
+```{r eval=FALSE}
+### Initialize settings
+scenicOptions <- initializeScenic(org="hgnc", dbDir="cisTarget_databases", nCores=32)
+scenicOptions@settings$dbs[1] <- 'hg38__refseq-r80__500bp_up_and_100bp_down_tss.mc9nr.feather'
+scenicOptions@settings$dbs[2] <- 'hg38__refseq-r80__10kb_up_and_down_tss.mc9nr.feather'
+scenicOptions@inputDatasetInfo$cellInfo <- cellInfo
+saveRDS(scenicOptions, file="int/scenicOptions.Rds") 
+
+# ### Co-expression network
+# genesKept <- geneFiltering(as.matrix(exprMat), scenicOptions)
+# exprMat_filtered <- exprMat[genesKept, ]
+# runCorrelation(exprMat_filtered, scenicOptions)
+# exprMat_filtered_log <- log2(exprMat_filtered+1) 
+# runGenie3(exprMat_filtered_log, scenicOptions)
+# 
+# ### Build and score the GRN
+# exprMat_log <- log2(exprMat+1)
+# scenicOptions@settings$dbs <- scenicOptions@settings$dbs["10kb"] # Toy run settings
+# runSCENIC_1_coexNetwork2modules(scenicOptions)
+# runSCENIC_2_createRegulons(scenicOptions, coexMethod=c("top5perTarget")) # Toy run settings
+# runSCENIC_3_scoreCells(scenicOptions, exprMat_log)
+# 
+# # Export:
+# export2scope(scenicOptions, exprMat)
+# 
+# # Binarize activity?
+# # aucellApp <- plotTsne_AUCellApp(scenicOptions, exprMat_log)
+# # savedSelections <- shiny::runApp(aucellApp)
+# # newThresholds <- savedSelections$thresholds
+# # scenicOptions@fileNames$int["aucell_thresholds",1] <- "int/newThresholds.Rds"
+# # saveRDS(newThresholds, file=getIntName(scenicOptions, "aucell_thresholds"))
+# # saveRDS(scenicOptions, file="int/scenicOptions.Rds")
+# runSCENIC_4_aucell_binarize(scenicOptions)
+# 
+# ### Exploring output 
+# # Check files in folder 'output'
+# # .loom file @ http://scope.aertslab.org
+# 
+# # output/Step2_MotifEnrichment_preview.html in detail/subset:
+# motifEnrichment_selfMotifs_wGenes <- loadInt(scenicOptions, "motifEnrichment_selfMotifs_wGenes")
+# tableSubset <- motifEnrichment_selfMotifs_wGenes[highlightedTFs=="Sox8"]
+# viewMotifs(tableSubset) 
+# 
+# # output/Step2_regulonTargetsInfo.tsv in detail: 
+# regulonTargetsInfo <- loadInt(scenicOptions, "regulonTargetsInfo")
+# tableSubset <- regulonTargetsInfo[TF=="Stat6" & highConfAnnot==TRUE]
+# viewMotifs(tableSubset) 
+```
+
+
+
+# Directories
+During this workflow we will save multiple files. To keep them tidy, we recommend to set the working directory to a new folder. 
+
+For example:
+```{r setwd, results='hide', warning=FALSE, eval=FALSE}
+dir.create("SCENIC_MouseBrain")
+setwd("SCENIC_MouseBrain") # Or `knitr::opts_knit$set(root.dir = 'example_results/SCENIC_MouseBrain')` in the first chunk if running a notebook
+```
+
+By default, the intermediate files and plots will be saved into the `int` folder, with a numbered prefix to keep them in order. You may use these files to check details about each step, or re-run parts of the analysis with different settings.
+The main output (i.e. plots, HTML reports,... ) will be saved into the `output` folder.
+
+# Input
+
+## Expression matrix
+
+The input for SCENIC is a single-cell RNA-seq expression matrix (with gene-symbol as `rownames`, see the `vignette("SCENIC_Setup")` for details). The first step is to load this matrix.
+
+For this tutorial we provide a toy example only 200 cells and <1000 genes from the mouse brain (described in the setup vignette):
+```{r loadLoom}
+loomPath <- system.file(package="SCENIC", "examples/mouseBrain_toy.loom")
+```
+
+```{r loadExprMat, eval=FALSE, echo=FALSE}
+# This toy example is a subset of the 3005 cell mouse brain dataset by Zeisel et al.:
+download.file("http://loom.linnarssonlab.org/clone/Previously%20Published/Cortex.loom", "Cortex.loom")
+loomPath <- "Cortex.loom"
+```
+
+
+## Cell info/phenodata
+In Step 3-4 (scoring the GRN and clustering), it is interesting to compare the results with known information about the cells. 
+You can already indicate which variables will be to plot, and assign them a specific color (otherwise one will be assigned automatically, e.g. when colloring on on the heatmaps or t-SNE).
+
+```{r cellInfo}
+cellInfo$nGene <- colSums(exprMat>0)
+head(cellInfo)
+cellInfo <- data.frame(cellInfo)
+cellTypeColumn <- "Class"
+colnames(cellInfo) <- "CellType"
+cbind(table(cellInfo$CellType))
+dir.create("int")
+saveRDS(cellInfo, file="int/cellInfo.Rds")
+```
+```{r cellInfoColor, fig.height=4, fig.width=4}
+# Color to assign to the variables (same format as for NMF::aheatmap)
+
+# colVars <- list(CellType=c("GSM4705589"="forestgreen", 
+#                            "GSM4705590"="darkorange", 
+#                            "GSM4837523"="magenta4",
+#                            "GSM4837525"="hotpink", 
+#                             "GSM4837527"="red3",
+#                            "GSM4705591"="skyblue"
+#                            # "6"="darkblue",
+#                            #  '7' = 'yellow'
+#                             #'8'='blueviolet'
+#                            # '9' = 'aquamarine'
+#                            ))
+# colVars$CellType <- colVars$CellType[intersect(names(colVars$CellType), cellInfo$CellType)]
+# saveRDS(colVars, file="int/colVars.Rds")
+# plot.new(); legend(0,1, fill=colVars$CellType, legend=names(colVars$CellType))
+```
+
+```{r cellInfoColor, fig.height=4, fig.width=4}
+# Color to assign to the variables (same format as for NMF::aheatmap)
+colVars <- list(CellType=c("Contractile"="forestgreen", 
+                           "Immune_synthetic_1"="darkorange", 
+                           "Immune_synthetic_2"="magenta4",
+                           "Osteogenic"="hotpink", 
+                            "Synthetic"="red3",
+                            "Unknown"="skyblue"
+                           # "6"="darkblue",
+                           #  '7' = 'yellow'
+                            #'8'='blueviolet'
+                           # '9' = 'aquamarine'
+                           ))
+colVars$CellType <- colVars$CellType[intersect(names(colVars$CellType), cellInfo$CellType)]
+saveRDS(colVars, file="int/colVars.Rds")
+plot.new(); legend(0,1, fill=colVars$CellType, legend=names(colVars$CellType))
+```
+
+# Initialize SCENIC settings
+
+In order to keep consistent settings across the multiple steps of SCENIC, most functions in SCENIC package use a common object where the options for the current run are stored. This object replaces the "arguments" for most functions, and should be created at the begining of a SCENIC run with the function `initializeScenic()`. 
+
+The default settings should be valid for most analyses. The parameters that need to be specified in all runs is the organism (`mgi` for mouse, `hgnc` for human, or `dmel` for fly), and the directory where the RcisTarget databases are stored (you may create a link in the current directory to avoid duplicating them, e.g. in linux: ` system("ln -s ~/path/to/dbs databases")`).
+
+For details on the options that can be modified check the help of `?initializeScenic` or of the specific function that takes it as input.
+
+```{r chooseOrg}
+org="hgnc" # or hgnc, or dmel
+dbDir="cisTarget_databases" # RcisTarget databases location
+myDatasetTitle="human_carotids" # choose a name for your analysis
+data(defaultDbNames)
+dbs <- defaultDbNames[[org]]
+dbs[1] <- c('hg38__refseq-r80__500bp_up_and_100bp_down_tss.mc9nr.feather')
+dbs[2] <- 'hg38__refseq-r80__10kb_up_and_down_tss.mc9nr.feather'
+#scenicOptions@settings$dbs <- dbs
+scenicOptions <- initializeScenic(org=org, dbDir=dbDir, dbs=dbs, datasetTitle=myDatasetTitle, nCores=22) 
+
+# Modify if needed
+scenicOptions@inputDatasetInfo$cellInfo <- "int/cellInfo.Rds"
+scenicOptions@inputDatasetInfo$colVars <- "int/colVars.Rds"
+# Databases:
+# scenicOptions@settings$dbs <- c("mm9-5kb-mc8nr"="mm9-tss-centered-5kb-10species.mc8nr.feather")
+# scenicOptions@settings$db_mcVersion <- "v8"
+
+# Save to use at a later time...
+saveRDS(scenicOptions, file="int/scenicOptions.Rds") 
+```
+
+# Co-expression network
+
+The first step of the SCENIC workflow is to infer potential transcription factor targets based on the expression data. To do this we use GENIE3 or GRNBoost. The input to either of these tools are the expression matrix (filtered), and a list of transcription factors (*potential regulators*). The output of GENIE3/GRBBoost, and a correlation matrix will be used to create the co-expression modules (`runSCENIC_1_coexNetwork2modules()`).
+
+*Choosing between GENIE3/GRNBoost*: In principle, many of the existing methods to infer co-expression networks could be used for this step, as long as its output is a list of potential targets for each TF (and it can be applied to scRNA-seq...).
+We selected **GENIE3** *(@huynh2010)* because it allows to identify non-linear relationships, even if they are only present in a subset of samples, and it was the best performer in the Network Inference DREAM5 challenge *(@marbach2012)*. GENIE3 can easily be run within R.
+
+However, GENIE3 is very time- and computationally-consuming (it will take several hours or days on datasets of 3-5k cells). To allow scalability to bigger datasets, we created **GRNboost** (see [*@aibar2017*](http://dx.doi.org/10.1038/nmeth.4463)) and the [arboreto](https://arboreto.readthedocs.io) framework. GRNBoost provides similar results to GENIE3 in just a fraction of the time (publication in press), so we highly recommend it for bigger datasets. 
+
+*Subsampling cells*: When there is a high proportion of low-quality cells, or if the computation time is an issue, it is also possible to infer the regulatory network using a subset of cells (e.g. selecting random or high-quality cells as input to the co-expression analysis). The activity of the regulatory network, *trained* on this subset of cells, can then be evaluated on all the cells in the dataset with AUCell (Step 3).
+Note that to avoid loss of resolution, the subset of cells should be representative of the whole dataset (e.g. contain sufficient representation of all the cell types).
+Examples of this approach are presented in [*@aibar2017*](http://dx.doi.org/10.1038/nmeth.4463) (i.e. subsampling this mouse brain dataset, and the analysis of 49k cells from mouse retina).
+
+## Gene filter/selection
+
+To run GENIE3/GRNBoost we recommend to apply soft gene filter, to remove genes that are expressed either at very low levels or in too few cells. 
+Here we apply a filtering based on the total number of counts of the gene, and the number of cells in which it is detected. 
+
+1. Filter by the **total number of reads per gene**. This filter is meant to remove genes that are most likely noise. 
+By *default* it keeps only the genes with at least `r 3*.01*ncol(exprMat)` UMI counts across all samples 
+(e.g. the total number the gene would have, if it was expressed with a value of `3` in 1% of the cells). 
+Adjust this value (`minCountsPerGene`) according to the dataset (it will depend on the dataset units, e.g. UMI, TPMs...).
+
+2. **Filter by the **number of cells in which the gene is detected** (e.g. >0 UMI, or >1 log2(TPM)). 
+By *default* (`minSamples`), genes that are detected in at least *1%* of the cells are kept. 
+This filtering is meant to remove genes whose reads come from one a few 'noisy' cells (genes that are only expressed in one, or very few cells, gain a lot of weight if they happen to coincide in a given cell).
+To avoid removing small (but potentially interesting) cell populations, we recommend to set a percentage lower than the smallest population of cells to be detected. 
+
+3. Finally, only the genes that are **available in RcisTarget databases** will be kept. 
+This filter is mostly to save some running time for GENIE3/GRNBoost, since the genes that are not available in the databases will not be used in upcoming steps.
+
+```{r filterGenes, results="hold"}
+# (Adjust minimum values according to your dataset)
+genesKept <- geneFiltering(as.matrix(exprMat), scenicOptions=scenicOptions,
+                           minCountsPerGene=3*.01*ncol(exprMat),
+                           minSamples=ncol(exprMat)*.01)
+```
+
+Before proceeding to the network inference, check whether any known relevant genes are filtered-out (if any relevant gene is missing, double-check whether the filters are appropiate): 
+
+```{r checkMissingGenes}
+interestingGenes <- c("ACTA2", "MYH11", "SOX9", 'ISG15', 'LGALS3', 'BMP4', 'NOG')
+# any missing?
+interestingGenes[which(!interestingGenes %in% genesKept)]
+```
+
+We can now **filter the expression matrix** to contain only these `r length(genesKept)` genes. 
+This matrix is now ready for the co-expression analysis.
+```{r saveFilteredExprMat}
+exprMat_filtered <- exprMat[genesKept, ]
+dim(exprMat_filtered)
+```
+
+`exprMat` will not be used for the co-expression analysis, it can be unloaded:
+```{r rmExprMat}
+dim(exprMat)
+```
+
+## Correlation
+
+GENIE3/GRNBoost can detect both positive and negative associations. In order to distinguish potential activation from repression, we will split the targets into positive- and negative-correlated targets (i.e. Spearman correlation between the TF and the potential target).
+
+*(This step can be run either before/after or simultaneously to GENIE3/GRNBoost)*
+
+Calculate the correlation: 
+```{r correlationMat, eval=FALSE}
+runCorrelation(as.matrix(exprMat_filtered), scenicOptions)
+```
+
+## GENIE3 
+
+*To run **GRNBoost** (in Python) instead of GENIE3. See `?exportsForGRNBoost` for details.*
+
+The input to GENIE3 is typically an expression matrix and a list of candidate regulators. 
+The function `runGenie3` will run GENIE3 with default settings, which are usually adequate for most datasets, using the transcription factors available in RcisTarget databases as candidate regulators.
+  
+Since GENIE3 is based on a Random Forest approach, each time it is run the results will be slightly different. The higher the number of trees used (`ntrees`), the lower the variability. We recommend to use `set.seed` to reproduce exact results in multiple runs. For more details, check `?GENIE3` (GENIE3 help) or `?runGenie3` (SCENIC wrapper for GENIE3).
+
+GENIE3 will typically take several hours (or days) to run. If you are running this workflow on an RStudio session, we recommend that you stop here and run the next code chunk in an independent R console (i.e. with `screen`/`tmux`) or in an server/HPC (if available). The upcoming code chunks will resume the workflow by loading GENIE3 output.
+
+
+```{r genie3, eval=TRUE, results="hold"}
+## If launched in a new session, you will need to reload...
+# setwd("...")
+# loomPath <- "..."
+# loom <- open_loom(loomPath, mode="r")
+# exprMat <- get_dgem(loom)
+# close_loom(loom)
+# genesKept <- loadInt(scenicOptions, "genesKept")
+# exprMat_filtered <- exprMat[genesKept,]
+# library(SCENIC)
+# scenicOptions <- readRDS("int/scenicOptions.Rds")
+
+# Optional: add log (if it is not logged/normalized already)
+exprMat_filtered <- log2(exprMat_filtered+1)
+```
+
+```{r}
+save.image(file = 'carotids_scenic.RData')
+```
+
+##LOAD-STOP point
+
+```{r genie3, eval=TRUE, results="hold"}
+# Run GENIE3
+set.seed(123) # For reproducibility of results
+#weightMat <- GENIE3(exprMatr, nCores=64, verbose=TRUE)
+runGenie3(as.matrix(exprMat_filtered), scenicOptions, resumePreviousRun = T, verbose=T, nParts = 40)
+```
+
+# Build and score the GRN (runSCENIC_...)
+
+Once the results from GENIE3/GRNBoost (and the correlation) are ready, the remaining steps of SCENIC can be run. 
+
+The easiest/fastest way is to use the following *wrapper* functions, each of them corresponding to one of the main steps in SCENIC workflow:
+
+  Build the *gene regulatory network*: 
+  1. Get co-expression modules
+  2. Get regulons (with [RcisTarget](http://bioconductor.org/packages/RcisTarget)): TF motif analysis)
+  
+  Identify *cell states*:
+  3. Score GRN (regulons) in the cells (with [AUCell](http://bioconductor.org/packages/AUCell))
+  4. Cluster cells according to the GRN activity
+
+>An overview of the steps workflow is explained in [*@aibar2017*](http://dx.doi.org/10.1038/nmeth.4463).
+Detailed tutorials/notebooks explaining these functions in detail are also available (see `vignette(package="SCENIC")`). These might be useful for users who want to know the details of the implementation, understand the results more in depth, or to modify or run only some of the steps of the workflow. 
+We recommend to check `vignette("detailedStep_2_createRegulons", package="SCENIC")` to understand how the Gene Regulatory Networks are build. For more info on the scoring of the networks on the cells see `vignette("detailedStep_3_scoreCells", package="SCENIC")`.
+
+Re-load the expression matrix if necessary: 
+```{r loadData2}
+loom <- open_loom(loomPath, mode="r")
+exprMat <- get_dgem(loom)
+close_loom(loom)
+# Optional: log expression (for TF expression plot, it does not affect any other calculation)
+```
+
+
+```{r loadData2}
+logMat <- log2(exprMat+1)
+dim(exprMat)
+```
+
+Run the remaining steps using the *wrapper* functions: 
+```{r runScenicWrapper, eval=FALSE}
+#scenicOptions <- readRDS("int/scenicOptions.Rds")
+scenicOptions@settings$verbose <- TRUE
+scenicOptions@settings$nCores <- 24
+scenicOptions@settings$seed <- 123
+
+# For a very quick run: 
+# coexMethod=c("top5perTarget")
+#scenicOptions@settings$dbs <- scenicOptions@settings$dbs["10kb"] # For toy run
+# save...
+```
+
+
+```{r runScenicWrapper, eval=FALSE}
+runSCENIC_1_coexNetwork2modules(scenicOptions)
+```
+
+
+```{r runScenicWrapper, eval=FALSE}
+scenicOptions@settings$nCores <- 2
+runSCENIC_2_createRegulons(scenicOptions) 
+scenicOptions@settings$nCores <- 24
+logMat <- log2(exprMat+1)
+runSCENIC_3_scoreCells(scenicOptions, as.matrix(logMat))
+```
+
+** *For a **quick run**, using the 'toy dataset', you may set `runSCENIC_2_createRegulons(scenicOptions, coexMethod="top5perTarget")` and only one of the RcisTarget databases. These results will not be as comprehensive as the full run, but might be enough for getting a feel of the interface.*
+
+# Optional steps: 
+
+## Binarize the network activity (regulon *on/off*)
+
+Building the GRN and scoring its activity in AUCell is often enough for datasets with very clear cell types. However, in many cases it is also useful to binarize the activity score into "on/off"; either for easier interpretation, or for maximizing the differences across cell types. It is possible to binarize only specific regulons for exploring/interpreting key TFs. However, binarizing the activity of all the regulons in the dataset allows to create the "Binarized regulon activity matrix", which can be used for upstream analysis (e.g. clustering). The binarized activity is specially useful to reduce technical biases (e.g. number of detected genes, batch effects), the grouping by patient of origin in cancer datasets, or even cross-species comparisons (see [*@aibar2017*](http://dx.doi.org/10.1038/nmeth.4463)). 
+
+To determine in which cells each regulon is active, we will use an AUC threshold. AUCell automatically calculates possible thresholds for the binarization, but they are often too conservative. We recommend to check these thresholds manually before proceeding to the binarization. This can be a iterative process, where the thresholds can be re-adjusted after an initial exploration. Once the final thresholds are selected, the cell-regulon activity will be summarized into a *binary activity matrix* in which the columns represent the cells and the rows the regulons. The coordinates of the matrix that correspond to active regulons in a given cell will contain a "1" value, and "0" all the others. 
+
+You can see the selected thresholds in the output from the previous step [file: `output/Step3_3.2_AUCtSNEs.html` (If you are using Rstudio, you might need to download the file and accompanying folder)], and these can be adjusted with AUCell's Shiny app: 
+
+```{r adjustThresholds, eval=FALSE}
+aucellApp <- plotTsne_AUCellApp(scenicOptions, logMat)
+savedSelections <- shiny::runApp(aucellApp)
+
+# Save the modified thresholds:
+newThresholds <- savedSelections$thresholds
+scenicOptions@fileNames$int["aucell_thresholds",1] <- "int/newThresholds.Rds"
+saveRDS(newThresholds, file=getIntName(scenicOptions, "aucell_thresholds"))
+saveRDS(scenicOptions, file="int/scenicOptions.Rds") 
+```
+
+
+Once you have optimized the thresholds, run `runSCENIC_4_aucell_binarize` to binarize the AUC, and generate some extra figures and clusterings:
+```{r binarize, eval=FALSE}
+scenicOptions@settings$devType="png"
+runSCENIC_4_aucell_binarize(scenicOptions, exprMat = logMat)
+```
+
+The t-SNEs can also be created using the binary activity matrix (in the same way as indicated in section *"Creating/comparing t-SNEs"*), just set `tsneAUC( ..., aucType="binary")` instead.
+
+## Clustering / dimensionality reduction on the regulon activity
+
+The cells can be grouped/clustered based on the regulon activity, either continuous or binarized (*See the section below "Exploring > Cell states" for details*). 
+
+If using t-SNE as visualization, it is recommended to try different settings to evaluate the stability of the states/clusters. Feel free to use UMAP, other clustering methods (or trajectory inference methods, if appropriate) instead.
+
+The function included in SCENIC package runs multiple t-SNEs with different settings; It will create all combinations between the selected "number of PCs" and "perplexity" (expected *running time*: few minutes to hours, depending on the number of cells):
+```{r}
+#nPcs <- c(40) # For toy dataset
+nPcs <- c(10,20,50)
+```
+
+```{r altTsnes, eval=FALSE}
+scenicOptions@settings$seed <- 123 # same seed for all of them
+# Run t-SNE with different settings:
+fileNames <- tsneAUC(scenicOptions, aucType="AUC", nPcs=nPcs, perpl=c(5,15,50, 100))
+fileNames <- tsneAUC(scenicOptions, aucType="AUC", nPcs=nPcs, perpl=c(5,15,50, 100), onlyHighConf=TRUE, filePrefix="int/tSNE_oHC")
+# Plot as pdf (individual files in int/):
+fileNames <- paste0("int/",grep(".Rds", grep("tSNE_", list.files("int"), value=T), value=T))
+```
+
+**Note: The toy dataset only contains ~8 regulons; using more than 8 PCs will not provide any difference...** 
+
+and to view/compare them...
+```{r altTsnesPlotShown, eval=TRUE, fig.height=6, fig.width=6}
+par(mfrow=c(1,1))
+fileNames <- paste0("int/",grep(".Rds", grep("tSNE_AUC", list.files("int"), value=T, perl = T), value=T))
+plotTsne_compareSettings(fileNames, scenicOptions, showLegend=T, varName="CellType", cex=.5)
+```
+
+```{r altTsnesPlot_oHC, eval=FALSE, fig.height=7, fig.width=6}
+# Using only "high-confidence" regulons (normally similar)
+par(mfrow=c(3,3))
+fileNames <- paste0("int/",grep(".Rds", grep("tSNE_oHC_AUC", list.files("int"), value=T, perl = T), value=T))
+plotTsne_compareSettings(fileNames, scenicOptions, showLegend=FALSE, varName="CellType", cex=.5)
+```
+
+The chosen t-SNE can then be saved as default to use for plots (can also be "binary", see below):
+```{r changeDefaultTsne}
+scenicOptions@settings$defaultTsne$aucType <- "AUC"
+scenicOptions@settings$defaultTsne$dims <- 50
+scenicOptions@settings$defaultTsne$perpl <- 100
+saveRDS(scenicOptions, file="int/scenicOptions.Rds")
+```
+# Export to loom/SCope
+
+The results from SCENIC can also be explored in http://scope.aertslab.org ([*@davie2018*](https://doi.org/10.1016/j.cell.2018.05.057)).
+
+The `.loom` file can be created with the function `export2scope()` (requires the package `SCopeLoomR`). This function saves the the main results from SCENIC  into a .loom file: 
+
+- Regulons 
+
+- Regulon activity (AUC matrix and thresholds)
+
+- Embeddings (e.g. t-SNE and UMAP on the regulon activity)
+
+The **motif enrichment analysis** and **co-expression modules** (e.g. GRNBoost/GENIE3 output) are stored in independent text files (mostly due to their bigger size).
+
+```{r eval=FALSE}
+# DGEM (Digital gene expression matrix)
+# (non-normalized counts)
+exprMat <- get_dgem(open_loom(loomPath))
+dgem <- exprMat
+head(colnames(dgem))  #should contain the Cell ID/name
+
+# Export:
+scenicOptions@fileNames$output["loomFile",] <- "output/pig_RCA_SMC.loom"
+export2loom(scenicOptions, exprMat)
+```
+
+To add extra data (e.g. embeddings or clusters), see `help(package="SCopeLoomR")`.
+
+## Loading results in a .loom file
+
+`SCopeLoomR` also provides functions to import the regulons, AUC, and embeddings from the loom file. e.g.: 
+
+```{r readLoom, eval=FALSE}
+scenicLoomPath <- getOutName(scenicOptions, "loomFile")
+loom <- open_loom(scenicLoomPath)
+
+# Read information from loom file:
+regulons_incidMat <- get_regulons(loom)
+regulons <- regulonsToGeneLists(regulons_incidMat)
+regulonsAUC <- get_regulons_AUC(loom)
+regulonsAucThresholds <- get_regulon_thresholds(loom)
+embeddings <- get_embeddings(loom)
+```
+
+# Exploring/interpreting the results 
+
+The `output` folder contains several files that provide an overview of the results from each step. These results can be explored in more detail through the intermediate files (saved in the `int` folder, which can be listed with `loadInt(scenicOptions)`).
+
+Some examples on how to explore the results:
+
+## Cell states 
+
+AUCell provides the activity of the regulons across the cells. By clustering the cells based on this regulon activity (either the continuous or binary AUC matrix), we can see whether there are groups of cells that tend to have the same regulons active, and reveal the network states that are recurrent across multiple cells. These states would be equivalent to the *attractor states* of the network. Combining these clustering with different visualization methods, we can explore the **association of cell states with specific regulons**. 
+
+SCENIC provides some wrapper functions to get a quick overview. For example, projecting the AUC and TF expression onto t-SNEs, and visualizing of the AUC as heatmaps, but feel free to explore alternative clustering and visualization tools.
+
+### Projection the AUC and TF expression onto t-SNEs
+
+Briefly, a t-SNE is a 2D projection of the cells, where cells (dots) are placed close to each other if they have similar input profiles (in our case, regulon activity).
+The t-SNE usually allows to get a quick and easy overview of the cell states in the dataset. 
+Note however, that t-SNE works well to identify distinct classes, but it is not appropiate for dinamic/continuous processes (e.g. trajectory-like visualizations).
+
+AUCell's interactive app *(for [SCope](http://scope.aertslab.org), see section "Export to loom/SCope")*:
+```{r aucellApp2, eval=FALSE}
+#logMat <- exprMat # Better if it is logged/normalized
+aucellApp <- plotTsne_AUCellApp(scenicOptions, logMat, skipDuplicatedExtended = T) # default t-SNE
+savedSelections <- shiny::runApp(aucellApp)
+```
+
+`AUCell_plotTSNE()` to save static plots:
+```{r tsneTfExpression, fig.height=6, fig.width=8}
+print(tsneFileName(scenicOptions))
+tSNE_scenic <- readRDS(tsneFileName(scenicOptions))
+aucell_regulonAUC <- loadInt(scenicOptions, "aucell_regulonAUC")
+```
+
+
+```{r tsneTfExpression, fig.height=6, fig.width=8}
+# Show TF expression:
+par(mfrow=c(2,3))
+AUCell::AUCell_plotTSNE(tSNE_scenic$Y, exprMat, aucell_regulonAUC[onlyNonDuplicatedExtended(rownames(aucell_regulonAUC))[c( 'NFKB1',  'NFKB2',  'RELB',  'RELA', 'STAT3', 'REL')],], plots="AUC")
+
+#AUCell::AUCell_plotTSNE(tSNE_scenic$Y, exprMat,
+#aucell_regulonAUC[onlyNonDuplicatedExtended(rownames(aucell_regulonAUC))[c('AHR', 'CEBPD', 'MSC', 'KLF10', 'STAT1', 'TWIST1'  )],], plots="AUC")
+```
+
+```{r tsneAUC_overview, eval=FALSE}
+# Save AUC as PDF:
+Cairo::CairoPDF("output/Step4_BinaryRegulonActivity_tSNE_colByAUC.pdf", width=20, height=15)
+par(mfrow=c(4,6))
+AUCell::AUCell_plotTSNE(tSNE_scenic$Y, cellsAUC=aucell_regulonAUC, plots="AUC")
+dev.off()
+```
+
+Density plot to detect most likely stable states (higher-density areas in the t-SNE):
+```{r tSNE_density, fig.height=4, fig.width=4}
+dens2d <- bkde2D(tSNE_scenic$Y, 1)$fhat
+image(dens2d, col=brewer.pal(9, "YlOrBr"), axes=FALSE)
+contour(dens2d, add=TRUE, nlevels=5, drawlabels=FALSE)
+```
+
+Show several regulons simultaneously:
+```{r tSNE_3cols, fig.height=4, fig.width=8}
+#par(bg = "black")
+par(mfrow=c(1,2))
+
+regulonNames <- c( "SOX9","MEF2C")
+#SCENIC::plotEmb_rgb()(scenicOptions, regulonNames, aucType="AUC", aucMaxContrast=0.6)
+cellCol <- SCENIC::plotEmb_rgb(scenicOptions,regulonNames = regulonNames,aucType = "AUC",aucMaxContrast = 0.8, offColor = "#c0c0c030",showPlot = TRUE, showLegend = TRUE, tSNE_fileName = NULL)
+text(0, 10, attr(cellCol,"red"), col="red", cex=.7, pos=4)
+text(-20,-10, attr(cellCol,"green"), col="green3", cex=.7, pos=4)
+
+regulonNames <- list(red=c("SOX9", "RUNX1"),
+                     green=c("MEF2C"),
+                     blue=c( "SMAD5"))
+cellCol <- SCENIC::plotEmb_rgb(scenicOptions, regulonNames, aucType="Binary", showPlot = TRUE, showLegend = TRUE, tSNE_fileName = NULL)
+text(5, 15, attr(cellCol,"red"), col="red", cex=.7, pos=4)
+text(5, 15-4, attr(cellCol,"green"), col="green3", cex=.7, pos=4)
+text(5, 15-8, attr(cellCol,"blue"), col="blue", cex=.7, pos=4)
+```
+
+## GRN: Regulon targets and motifs
+
+**Genes included in the regulons**: 
+```{r}
+a <- corrMat_pigs[,c('THY1', 'EFEMP1', 'THBS2', 'CDH11', 'VCAN', 'PCOLCE', 'COL14A1', 'CTHRC1')] %>% as.matrix()
+a <- corrMat_hfdc[,c('Nedd4', 'Sost', 'Ace', 'Ctgf')] %>% as.matrix()
+```
+
+
+```{r}
+names(regulons[grep(regulons, pattern = 'MFGE8')])
+names(regulons[grep(regulons, pattern = 'COL2A1')])
+names(regulons[grep(regulons, pattern = 'FGF2')])
+names(regulons[grep(regulons, pattern = 'SOX9')])
+names(regulons[grep(regulons, pattern = 'BMP2')])
+names(regulons[grep(regulons, pattern = 'BMP3')])
+
+names(regulons[grep(regulons, pattern = 'EFEMP1')])
+names(regulons[grep(regulons, pattern = 'THBS2')])
+names(regulons[grep(regulons, pattern = 'CDH11')])
+names(regulons[grep(regulons, pattern = 'VCAN')])
+names(regulons[grep(regulons, pattern = 'THY1')])
+names(regulons[grep(regulons, pattern = 'PCOLCE')])
+names(regulons[grep(regulons, pattern = 'SERPINF1')])
+names(regulons[grep(regulons, pattern = 'ASPN')])
+names(regulons[grep(regulons, pattern = 'SNAI2')])
+names(regulons[grep(regulons, pattern = 'HAPLN1')])
+
+
+names(regulons[grep(regulons, pattern = 'BMP4')])
+names(regulons[grep(regulons, pattern = 'VEGFA')])
+names(regulons[grep(regulons, pattern = 'HIF1A')])
+
+names(regulons[grep(regulons, pattern = 'GEM')])
+names(regulons[grep(regulons, pattern = 'C1S')])
+
+names(regulons[grep(regulons, pattern = 'SCX')])
+```
+```{r}
+rownames(binaryActPerc_subset)[ grep(rownames(binaryActPerc_subset), pattern = 'NFK')]
+```
+
+```{r}
+names(regulons[grep(regulons, pattern = 'HAPLN1')])[!(names(regulons[grep(regulons, pattern = 'HAPLN1')]) %in% names(regulons[grep(regulons, pattern = 'COL2A1')]))]
+```
+
+
+```{r seeRegulons}
+regulons <- loadInt(scenicOptions, "regulons")
+regulons[c("SOX9","MEF2C", "RUNX1", 'PPARD', 'OSR1', 'RAD21', 'SUZ12', 'TWIST1', 'CEBPB','CEBPD', 'LMO2', 'MSC', 'REL', 'STAT1')]
+```
+
+
+```{r}
+regulons[c( 'STAT1')]$STAT1[!(regulons[c( 'STAT1')]$STAT1 %in% regulons[c( 'STAT3')]$STAT3)]
+#regulons[c( 'STAT1')]$STAT1
+
+regulons[c( 'STAT3')]$STAT3[!(regulons[c( 'STAT3')]$STAT3  %in% regulons[c( 'STAT1')]$STAT1)]
+```
+
+Note than only regulons with 10 genes or more are scored with AUCell: 
+```{r seeRegulons2}
+regulons <- loadInt(scenicOptions, "aucell_regulons")
+head(cbind(onlyNonDuplicatedExtended(names(regulons))))
+```
+
+Details on the TF-target links: For each TF-target pair, the stats from the intermediate steps are summarized in `loadInt(scenicOptions, "regulonTargetsInfo")` (saved as text in: `getOutName(scenicOptions, "s2_regulonTargetsInfo")`: `r getOutName(scenicOptions, "s2_regulonTargetsInfo")`). This table can be used to explore the support to specific links. Since it will typically contain several thousand rows (in this run: `r nrow(loadInt(scenicOptions, "regulonTargetsInfo"))`), in most cases it is advisable to subset it before exporting it as HTML.
+
+```{r motifEnrichmentDT}
+regulonTargetsInfo <- loadInt(scenicOptions, "regulonTargetsInfo")
+tableSubset <- regulonTargetsInfo[TF==c("TWIST1", "SOX9", 'MEF2C') & highConfAnnot==TRUE]
+viewMotifs(tableSubset) 
+```
+
+
+The full list of **TF motifs** supporting the regulons can be seen in the restuls from **RcisTarget motif enrichment results** (for the co-expression modules). These are saved in `motifEnrichment_selfMotifs_wGenes`.
+A preview of these results is exported as html in *`r getOutName(scenicOptions, "s2_motifEnrichmentHtml")`* (and as text in: *`r getOutName(scenicOptions, "s2_motifEnrichment")`*).
+
+Alternative tables, showing more or fewer rows/columns could be generated modifiying this code: 
+
+```{r motifEnrichmentDTsubset, eval=FALSE}
+motifEnrichment_selfMotifs_wGenes <- loadInt(scenicOptions, "motifEnrichment_selfMotifs_wGenes")
+tableSubset <- motifEnrichment_selfMotifs_wGenes[highlightedTFs=="Dlx5"]
+viewMotifs(tableSubset) 
+```
+
+
+## Regulators for clusters or known cell types
+
+The regulatory analysis from SCENIC can be combined with other analyses, for example clustering, or focus on regulators for specific cell types. There are multiple options to do these analyses (your imagination is the limit!). 
+Here are some quick examples to start:
+
+- **Average Regulon Activity** by cluster
+
+(Clusters could also be used instead of "cell types", e.g. with Seurat: `cellInfo <- data.frame(seuratCluster=Idents(seuratObject))`)
+
+```{r fig.height=25, fig.width=6, dpi=450}
+## Finish splitting for orifins and clusters to find specidic regulons
+regulonAUC <- loadInt(scenicOptions, "aucell_regulonAUC")
+regulonAUC <- regulonAUC[onlyNonDuplicatedExtended(rownames(regulonAUC)),]
+colnames(cellInfo[1]) <- 'CellType'
+#cellInfo$orig.ident <- SMC_pigmicehum_plaque_elastic_hg$orig.ident
+#cellInfo1 <- cellInfo %>% mutate(cellInfo[,4] = paste(cellInfo[,3], cellInfo[,1], sep = "_"), .after = ellInfo[,1])
+#cellInfo[,4] <- paste(cellInfo[,3], cellInfo[,1], sep = "_")
+regulonActivity_byCellType <- sapply(split(rownames(cellInfo), cellInfo$CellType),
+                                     function(cells) rowMeans(getAUC(regulonAUC)[,cells]))
+
+regulonActivity_byCellType_Scaled <- t(scale(t(regulonActivity_byCellType), center = T, scale=T))
+
+```
+
+
+```{r fig.height=30, fig.width=8, dpi=450}
+pheatmap::pheatmap(regulonActivity_byCellType_Scaled, fontsize_row=7, 
+                   color=colorRampPalette(c("blue","white","red"))(100), breaks=seq(-3, 3, length.out = 100),
+                   #treeheight_row=30, treeheight_col=10, border_color=NA, cellheight = 7)
+                   filename="regulonActivity_byCellType_human_carotids.pdf", width=10, height=25)
+```
+
+
+```{r}
+topRegulators <- reshape2::melt(regulonActivity_byCellType_Scaled)
+colnames(topRegulators) <- c("Regulon", "CellType", "RelativeActivity")
+topRegulators <- topRegulators[which(topRegulators$RelativeActivity>0),]
+viewTable(topRegulators)
+```
+
+
+```{r}
+write.xlsx(topRegulators, 'topregulators_humans_carotids.xlsx')
+```
+
+- Binarized version (**~ percentage** of cells of that cell type/cluster with the regulon active)
+```{r}
+minPerc <- .1
+binaryRegulonActivity <- loadInt(scenicOptions, "aucell_binary_nonDupl")
+cellInfo_binarizedCells <- cellInfo[which(rownames(cellInfo)%in% colnames(binaryRegulonActivity)),, drop=FALSE]
+regulonActivity_byCellType_Binarized <- sapply(split(rownames(cellInfo_binarizedCells), cellInfo_binarizedCells$CellType), 
+                                               function(cells) rowMeans(binaryRegulonActivity[,cells, drop=FALSE]))
+binaryActPerc_subset <- regulonActivity_byCellType_Binarized[which(rowSums(regulonActivity_byCellType_Binarized>minPerc)>0),]
+```
+
+
+```{r, fig.height=28, fig.width=8}
+pheatmap::pheatmap(binaryActPerc_subset, fontsize_row=6, 
+                   color = colorRampPalette(c("white","pink","red"))(100), breaks=seq(0, 1, length.out = 100),
+                   treeheight_row=20, treeheight_col=10, border_color=NA)
+                  # filename="regulonActivityBinary_byCellType_human_carotids.pdf", width=10, height=25)
+
+```
+
+```{r}
+topRegulators <- reshape2::melt(regulonActivity_byCellType_Binarized)
+colnames(topRegulators) <- c("Regulon", "CellType", "RelativeActivity")
+topRegulators <- topRegulators[which(topRegulators$RelativeActivity>minPerc),]
+viewTable(topRegulators)
+```
+
+
+```{r}
+write.xlsx(topRegulators, 'topregulatorsBinar_humans_carotids.xlsx')
+```
+
+- Visualizing the regulon activities on **embeddings/trajectories** calculated with other methods...
+```{r eval=FALSE}
+#dr_coords <- Embeddings(SMC_aorta, reduction="umap")
+dr_coords <- Embeddings(human_elastic_plaques_counts_s, reduction="umap")
+
+tfs <- c("MEF2C","SP1","TCF4", "TEAD1", 'ATF3',  'TWIST1', 'SMAD5',  'IRF1', 'HOXA10', 'SOX9', 'SUZ12', 'RAD21', 'SNAI2')
+tfs <- c('NFKB1', 'NFKB2', 'RELB', 'RELA', 'STAT3')
+```
+
+
+```{r eval=FALSE}
+par(mfrow=c(2,3))
+tf_seurat_clusters <- AUCell::AUCell_plotTSNE(dr_coords, cellsAUC=selectRegulons(regulonAUC, tfs), plots = "AUC")
+DimPlot(human_elastic_plaques_counts_s)
+```
+
+Get modules of TFs
+```{r}
+
+dat <- t(scale(regulonAUC@assays@data@listData[["AUC"]], center = T, scale = T))
+#dat <- t(regulonAUC@assays@data@listData[["AUC"]])
+#AU_cor <- cor(t(AU), method = 'pearson')
+# let 'dat' is your matrix: columns are TFs, rows are activity values in different cells
+# get correlation matrix and melt it 
+# to get 3 column data frame: TF(a) - TF(b) - Pearson coeff
+cordf <- melt(cor(dat))
+# mark reciprocally equal pairs
+cordf$name <- apply(cordf, 1, function(x) paste(sort(x[1:2]), collapse = "-"))
+cordf <- cordf[order(cordf$Var1), ]
+# count CSI
+cordf$csi <- apply(cordf, 1, function(x) {
+  # make temporary df of TFs in pair with other TFs
+  tmpdf <- cordf[cordf$Var1 %in% c(x[[1]], x[[2]]) | cordf$Var2 %in% c(x[[1]], x[[2]]), ]
+  tmpdf <- tmpdf[order(tmpdf$Var1), ]
+  # remove reciprocally equal pairs
+  tmpdf <- tmpdf[!duplicated(tmpdf$name), ]
+  # remove homological pairs with the same TF
+  tmpdf <- tmpdf[!(tmpdf$Var1 == tmpdf$Var2), ]
+  # remove pair of selected TFs
+  tmpdf <- tmpdf[tmpdf$name != x[[4]], ]
+  # calculate and return csi
+  y <- sum(as.numeric(x[[3]]) > tmpdf$value)/nrow(tmpdf)
+  return(y)
+})
+# Reshape CSI long DF into matrix
+csimat <- acast(cordf[, -c(3,4)], Var1 ~ Var2, value.var = "csi")
+# make distance matrix from CSI
+# CSI is a measure of similarity (how close to each other two TFs) by definition
+# To obtain the measure of distance, we substract CSI from 1
+dd <- as.dist(1-csimat) 
+# plot cluster dendro
+hc <- hclust(dd, method = "ward.D")
+plot(hc)
+# And the distance threshold to combine TF into modules 
+# corresponding to CSI = 0.9 would be (1-0.9) = 0.1
+abline(h = 0.1, col = 2)
+text(x, y+0.1, labels=x, cex=x)
+
+
+p1 <- pheatmap(csimat, clustering_method = "ward.D")
+ggsave(filename = 'human_carotids_CSI_heatmap.png', device = 'png',plot = p1, 
+       width = 30, height = 30)
+
+# find modules
+my_modules <- moduleNumber(hc, cutHeight = 0.7, minSize = 2)
+length(unique(my_modules))
+table(my_modules)
+my_labels <- paste0("M", my_modules)
+names(my_labels) <- names(my_modules)
+my_colors <- labels2colors(my_modules)
+a <- tibble(tf = names(my_modules), module = my_modules) %>% 
+  mutate(tf = str_replace_all(tf, " \\(.*", "")) %>% 
+  group_by(module) %>% 
+  summarise(n = n(), tfs = paste(tf, collapse = ", ")) 
+write.xlsx(a, 'modules_human_Wirka_scenic_scaled.xlsx')
+# or plot heatmap
+p2 <- pheatmap(csimat, clustering_method = "ward.D", 
+         annotation = data.frame(module = my_labels), fontsize = 6)
+ggsave(filename = 'human_Wirka_scenic_CSI_heatmap_modules_scaled.png', device = 'png',plot = p2, 
+       width = 30, height = 30)
+```
+
+```{r}
+clusters <- wirka_ds$integrated_snn_res.0.3
+
+dat <- cbind(dat, clusters)
+tmp1 <- my_modules_df[my_modules_df$my_modules == 1,]
+tmp2 <- dat[,colnames(dat) %in% tmp1$rowname]
+tmp2 <- cbind(tmp2, as.factor(clusters))
+colnames(tmp2)[ncol(tmp2)] <- 'clusters'
+tmp2 <- rowMeans(rowmean(tmp2[,1:(ncol(tmp2)-1)], group = clusters))
+
+TF_dif_act <- data.frame(matrix(NA,    # Create empty data frame
+                          nrow = 17,
+                          ncol = 9))
+colnames(TF_dif_act) <- c('Cl_0', 'Cl_1','Cl_2','Cl_3','Cl_4','Cl_5', 'Cl_6','Cl_7','module')
+
+my_modules_df <- as.data.frame(my_modules)
+my_modules_df <- rownames_to_column(my_modules_df)
+
+for(i in 1:17) {
+  tmp1 <- my_modules_df[my_modules_df$my_modules == i,]
+  tmp2 <- dat[,colnames(dat) %in% tmp1$rowname]
+  tmp2 <- cbind(tmp2, as.factor(clusters))
+  colnames(tmp2)[ncol(tmp2)] <- 'clusters'
+  tmp3 <- rowMeans(rowmean(tmp2[,1:(ncol(tmp2)-1)], group = clusters)) %>% as.data.frame()
+  TF_dif_act[i,ncol(TF_dif_act)] <- paste('M_', i)
+  TF_dif_act[i,1:(ncol(TF_dif_act)-1)] <- t(tmp3)
+}
+TF_dif_act$module <- paste('M_', rownames(TF_dif_act))
+write.xlsx(TF_dif_act, 'TF_modules_activity_Wirka.xlsx')
+
+
+rownames(TF_dif_act) <- TF_dif_act$module
+TF_dif_act <- TF_dif_act[,1:8]
+TF_dif_act_scaled <- t(scale(t(TF_dif_act), center = T, scale = T))
+```
+
+```{r}
+TF_expr_mod <- data.frame(matrix(NA,    # Create empty data frame
+                          nrow = 17,
+                          ncol = 9))
+colnames(TF_expr_mod) <- c('Cl_0', 'Cl_1','Cl_2','Cl_3','Cl_4','Cl_5', 'Cl_6','Cl_7','module')
+my_modules_df <- as.data.frame(my_modules)
+gh <- rownames(my_modules_df)
+gh <- gsub('_', ' ', gh)
+my_modules_df$Gene <- word(gh, 1)
+dat_2 <-  t(as.matrix(wirka_ds@assays$RNA@data))
+for(i in 1:17) {
+  tmp1 <- my_modules_df[my_modules_df$my_modules == i,]
+  tmp2 <- dat_2[,colnames(dat_2) %in% tmp1$Gene]
+  tmp2 <- cbind(tmp2, as.factor(clusters))
+  colnames(tmp2)[ncol(tmp2)] <- 'clusters'
+  tmp3 <- rowMeans(rowmean(tmp2[,1:(ncol(tmp2)-1)], group = clusters)) %>% as.data.frame()
+  TF_expr_mod[i,ncol(TF_expr_mod)] <- paste('M_', i)
+  TF_expr_mod[i,1:(ncol(TF_expr_mod)-1)] <- t(tmp3)
+}
+
+rownames(TF_expr_mod) <- TF_expr_mod$module
+TF_expr_mod <- TF_expr_mod[,1:8]
+TF_expr_mod <- t(scale(t(TF_expr_mod), center = T, scale = T))
+
+write.xlsx(TF_expr_mod, 'TF_modules_expression_Wirka_scaled.xlsx')
+```
+
+```{r}
+apply(TF_dif_act_scaled, 2, function(x) sum(x >= 1))
+apply(TF_expr_mod, 2, function(x) sum(x >= 1))
+apply(TF_dif_act_scaled, 1, function(x) sum(x >= 1))
+apply(TF_expr_mod, 1, function(x) sum(x >= 1))
+TF_expr_mod_bin <- as.data.frame(TF_expr_mod >= 1 )
+TF_dif_act_scaled_bin <- as.data.frame(TF_dif_act_scaled >= 1 )
+rownames(TF_dif_act_scaled_bin) <- paste(rownames(TF_dif_act_scaled_bin), word(a$tfs, 1, 2, sep = fixed(", ")))
+
+
+TF_expr_mod_bin <- matrix(as.numeric(TF_expr_mod_boolean), ncol = ncol(TF_expr_mod_boolean))
+colnames(TF_expr_mod_bin) <- colnames(TF_expr_mod_boolean)
+rownames(TF_expr_mod_bin) <- rownames(TF_expr_mod_boolean)
+
+sank_wirka <- data.frame(matrix(NA,    # Create empty data frame
+                          nrow = 22,
+                          ncol = 2))
+colnames(sank_wirka) <- c('Cluster', 'Module')
+for(i in 8){
+  numb <- sum(TF_expr_mod_bin[,i])
+  tmp <- matrix() 
+  j = 1
+  sank_wirka[j:(j+numb),1] <- colnames(TF_expr_mod_bin)[i]
+  sank_wirka[j:(j+numb),2] <- as.data.frame(which(TF_expr_mod_bin[,i]))
+  
+}
+sank_wirka[n,] <- ifelse(TF_expr_mod_bin[n,i] == 1, data.frame(rownames(TF_expr_mod_bin[n,i]), colnames(TF_expr_mod_bin[n,i])), '')
+sank_wirka <- ifelse(TF_expr_mod_bin = 1, )
+
+```
+
+```{r}
+## make a toy boolean matrix
+toy_matrix <- matrix(rep(FALSE, 12), ncol = 3)
+colnames(toy_matrix) <- paste0("C", 1:3)
+rownames(toy_matrix) <- paste0("M", 1:4)
+toy_matrix[4,1] = toy_matrix[2:3,2] = toy_matrix[c(1,4),3] <- TRUE
+toy_matrix
+## convert boolean matrix to character correspondance matrix "cluster" - "module"
+## make empty matrix
+cm_matrix <- matrix(NA, ncol = 2, nrow = 0, 
+                    dimnames = list(NULL, c("cell_cluster", "tf_module")))
+## use for loop
+for(i in 1:ncol(TF_expr_mod_bin)){
+  tmp_mat <- cbind(rep(colnames(TF_expr_mod_bin)[i], sum(TF_expr_mod_bin[, i])),
+                   rownames(TF_expr_mod_bin)[which(TF_expr_mod_bin[, i])])
+  cm_matrix <- rbind(cm_matrix, tmp_mat)
+}; rm(i, tmp_mat)
+## make sankey plot using ggsankey
+df <- make_long(data.frame(cm_matrix), cell_cluster, tf_module)
+p1 <- ggplot(df, aes(x = x, 
+               next_x = next_x, 
+               node = node, 
+               next_node = next_node,
+               fill = factor(node),
+               label = node)) +
+  geom_sankey(flow.alpha = 0.5, node.color = 1) +
+  geom_sankey_label(size = 4, color = 1, fill = "white", width = 0.1, fontface = "bold") +
+  scale_fill_brewer(palette = 'Set1') +
+  theme_sankey(base_size = 12) +
+  labs(title = "Cell clusters and TF modules in Wirka SMCs based on expression", x = NULL) +
+  theme(legend.position = "none", 
+        plot.title = element_text(hjust = 0.5),
+        axis.text.x = element_blank())
+p1
+```
+```{r}
+cm_matrix <- matrix(NA, ncol = 2, nrow = 0, 
+                    dimnames = list(NULL, c("cell_cluster", "tf_module")))
+## use for loop
+for(i in 1:ncol(TF_dif_act_scaled_bin)){
+  tmp_mat <- cbind(rep(colnames(TF_dif_act_scaled_bin)[i], sum(TF_dif_act_scaled_bin[, i])),
+                   rownames(TF_dif_act_scaled_bin)[which(TF_dif_act_scaled_bin[, i])])
+  cm_matrix <- rbind(cm_matrix, tmp_mat)
+}; rm(i, tmp_mat)
+## make sankey plot using ggsankey
+df <- make_long(data.frame(cm_matrix), cell_cluster, tf_module)
+p2 <- ggplot(df, aes(x = x, 
+               next_x = next_x, 
+               node = node, 
+               next_node = next_node,
+               fill = factor(node),
+               label = node)) +
+  geom_sankey(flow.alpha = 0.5, node.color = 1) +
+  geom_sankey_label(size = 4, color = 1, fill = "white", width = 0.1, fontface = "bold") +
+  scale_fill_brewer(palette = 'Set1') +
+  theme_sankey(base_size = 12) +
+  labs(title = "Cell clusters and TF modules in Wirka SMCs based on regulon activity", x = NULL) +
+  theme(legend.position = "none", 
+        plot.title = element_text(hjust = 0.5),
+        axis.text.x = element_blank())
+p2
+```
+
+
+
+
+```{r}
+skimr::skim(t(scale(TF_dif_act[1:8], center = T, scale = T)))
+```
+
+
+```{r}
+
+  
+  a <- a %>% mutate(group = paste(mice_or_not, integrated_snn_res.0.3, sep = "_"), .after = nFeature_RNA)
+a$`ZXDC (12g)`
+tmp <- a %>% 
+  group_by(group) %>% 
+  dplyr::select(`AHR (14g)`:`ZXDC (12g)`) %>% 
+  summarise_all(list(A = ~sum(.x == 1), N = ~sum(.x == 0))) %>% 
+  as.data.frame()
+rownames(tmp) <- tmp$group
+tmp <- t(tmp[, -1])
+tmp <- tmp[order(rownames(tmp)), ]
+tmp <- data.frame(tmp)
+
+
+##Constructing Sankey plot
+
+my_modules_df <- as.data.frame(my_modules)
+my_modules_df$regulon <- rownames_to_column(my_modules_df)
+rn_my_modules_df <- rownames(my_modules_df)
+b <- gsub('_', ' ', rn_my_modules_df)
+my_modules_df$Gene <- word(b, 1)
+
+mice_WT_SOX9_SMC$Cluster_Condition <- paste0(mice_WT_SOX9_SMC$orig.ident, '_', mice_WT_SOX9_SMC$SCT_snn_res.0.35)
+mice_WT_SOX9_SMC$Cluster_Condition <- as.factor(mice_WT_SOX9_SMC$Cluster_Condition)
+expr_WT_0 <- subset(mice_WT_SOX9_SMC, orig.ident == 'mice_WT' & SCT_snn_res.0.35 == '0')[['RNA']]
+expr_WT_0 <- expr_WT_0@data
+TF_mod_expr_WT <- expr_WT_0[rownames(expr_WT_0) %in% my_modules_df$Gene,] %>% as.data.frame()
+TF_mod_expr_WT$Gene <- rownames(TF_mod_expr_WT)
+TF_mod_expr_WT$module <- my_modules_df$my_modules[my_modules_df$Gene %in% TF_mod_expr_WT$Gene]
+#Cl0_WT_mod <- aggregate(TF_mod_expr_WT, list(TF_mod_expr_WT$module), mean)
+#Cl0_WT_mod <- rowmean(Cl0_WT_mod[,-1])
+Cl0_WT_mod <- rowmean(TF_mod_expr_WT[,1:1512], group = TF_mod_expr_WT$module)  %>% rowMeans()
+  
+expr_WT_1 <- subset(mice_WT_SOX9_SMC, orig.ident == 'mice_WT' & SCT_snn_res.0.35 == 1)[['RNA']]
+expr_WT_1 <- expr_WT_1@data
+TF_mod_expr_WT <- expr_WT_1[rownames(expr_WT_1) %in% my_modules_df$Gene,] %>% as.data.frame()
+TF_mod_expr_WT$Gene <- rownames(TF_mod_expr_WT)
+TF_mod_expr_WT$module <- my_modules_df$my_modules[my_modules_df$Gene %in% TF_mod_expr_WT$Gene]
+#Cl0_WT_mod <- aggregate(TF_mod_expr_WT, list(TF_mod_expr_WT$module), mean)
+#Cl0_WT_mod <- rowmean(Cl0_WT_mod[,-1])
+Cl1_WT_mod <- rowmean(TF_mod_expr_WT[,1:(length(colnames(TF_mod_expr_WT))-2)], group = TF_mod_expr_WT$module)  %>% rowMeans()
+
+expr_WT_2 <- subset(mice_WT_SOX9_SMC, orig.ident == 'mice_WT' & SCT_snn_res.0.35 == 2)[['RNA']]
+expr_WT_2 <- expr_WT_2@data
+TF_mod_expr_WT <- expr_WT_2[rownames(expr_WT_2) %in% my_modules_df$Gene,] %>% as.data.frame()
+TF_mod_expr_WT$Gene <- rownames(TF_mod_expr_WT)
+TF_mod_expr_WT$module <- my_modules_df$my_modules[my_modules_df$Gene %in% TF_mod_expr_WT$Gene]
+#Cl0_WT_mod <- aggregate(TF_mod_expr_WT, list(TF_mod_expr_WT$module), mean)
+#Cl0_WT_mod <- rowmean(Cl0_WT_mod[,-1])
+Cl2_WT_mod <- rowmean(TF_mod_expr_WT[,1:(length(colnames(TF_mod_expr_WT))-2)], group = TF_mod_expr_WT$module)  %>% rowMeans()
+
+TF_expr_mod <- data.frame(matrix(NA,    # Create empty data frame
+                          nrow = 26,
+                          ncol = 10))
+n=1
+for (i in levels(mice_WT_SOX9_SMC$Cluster_Condition)) {
+  tmp_subset <- subset(mice_WT_SOX9_SMC, Cluster_Condition == i)[['RNA']]
+  tmp_subset <- tmp_subset@data
+  TF_mod_expr <- tmp_subset[rownames(tmp_subset) %in% my_modules_df$Gene,] %>% as.data.frame()
+  TF_mod_expr$Gene <- rownames(TF_mod_expr)
+  TF_mod_expr$module <- my_modules_df$my_modules[my_modules_df$Gene %in% TF_mod_expr$Gene]
+  colnames(TF_expr_mod)[n] <- i
+  TF_expr_mod[,n] <- rowmean(TF_mod_expr[,1:(length(colnames(TF_mod_expr))-2)], group = TF_mod_expr$module)  %>% rowMeans()
+  n <- n+1
+}
+
+
+TF_expr_mod$Module <- paste0('M_', rownames(TF_expr_mod))
+TF_expr_mod_scaled <- as.data.frame(scale(TF_expr_mod[,-11], scale = T))
+TF_expr_mod_WT <- TF_expr_mod[,6:11]
+TF_expr_mod_SOX9 <- TF_expr_mod[,c(1:5, 11)]
+
+cl3_tf_expr_mod <- as.data.frame(cbind(as.numeric(TF_expr_mod$mice_SOX9_0 - TF_expr_mod$mice_WT_0), as.numeric(TF_expr_mod$mice_SOX9_1 - TF_expr_mod$mice_WT_1), as.numeric(TF_expr_mod$mice_SOX9_2 - TF_expr_mod$mice_WT_2), as.numeric(TF_expr_mod$mice_SOX9_3 - TF_expr_mod$mice_WT_3), as.numeric(TF_expr_mod$mice_SOX9_4 - TF_expr_mod$mice_WT_4), TF_expr_mod$Module))
+colnames(cl3_tf_expr_mod) <- c('Diff_0', 'Diff_1','Diff_2','Diff_3','Diff_4', 'module')
+cl3_tf_expr_mod[,1:5] <- as.numeric(cl3_tf_expr_mod[,1:5])
+write.xlsx(cl3_tf_expr_mod, 'TF_modules_differences.xlsx')
+write.xlsx(TF_expr_mod, 'TF_expr_mod.xlsx')
+
+dendroNetwork(hc, height = 5000)
+sankeyNetwork(Links = Energy$links, Nodes = Energy$nodes, Source = "source",
+             Target = "target", Value = "value", NodeID = "name",
+             units = "TWh", fontSize = 12, nodeWidth = 30)
+```
+
+```{r}
+
+
+ dist.JSD <- function(inMatrix, pseudocount=0.000001, ...) {
+	KLD <- function(x,y) sum(x *log(x/y))
+	JSD<- function(x,y) sqrt(0.5 * KLD(x, (x+y)/2) + 0.5 * KLD(y, (x+y)/2))
+	matrixColSize <- length(colnames(inMatrix))
+	matrixRowSize <- length(rownames(inMatrix))
+	colnames <- colnames(inMatrix)
+	resultsMatrix <- matrix(0, matrixColSize, matrixColSize)
+        
+  inMatrix = apply(inMatrix,1:2,function(x) ifelse (x==0,pseudocount,x))
+
+	for(i in 1:matrixColSize) {
+		for(j in 1:matrixColSize) { 
+			resultsMatrix[i,j]=JSD(as.vector(inMatrix[,i]),
+			as.vector(inMatrix[,j]))
+		}
+	}
+	colnames -> colnames(resultsMatrix) -> rownames(resultsMatrix)
+	as.dist(resultsMatrix)->resultsMatrix
+	attr(resultsMatrix, "method") <- "dist"
+	return(resultsMatrix) 
+ }
+
+data.dist <- dist.JSD(t(dat))
+```
+
+LOW-HIGH immune cell content comparison
+
+```{r}
+sample_info <- read_delim(file = 'sample_info.tsv.txt')
+sample_info_short <- subset(sample_info, sample_info$sample_id %in% human_elastic_plaques_counts_s$sample_id)
+sample_info_short <- sample_info_short[,c(1,16:33)]
+pca_plaques <- prcomp(sample_info_short[,c(2:15, 17:19)])
+pca_plaques <- prcomp(scale(sample_info[,c(8, 16:29, 31:33)], scale = T, center = T))
+pca_plaques.plot <- autoplot(pca_plaques,
+                          data = sample_info,
+                          colour = 'macro.group',
+                          loadings = TRUE, loadings.colour = 'blue',
+         loadings.label = TRUE, loadings.label.size = 3
+                        )
+  
+pca_plaques.plot
+sample_info_short
+```
+
+```{r}
+pca_plaques <- prcomp(sample_info_short[,c(2:15, 17:19)])
+pca_plaques.plot <- autoplot(pca_plaques,
+                          data = sample_info_short,
+                          colour = 'macrophage_content',
+                          loadings = TRUE, loadings.colour = 'blue',
+                          loadings.label = TRUE, loadings.label.size = 3
+                        )
+pca_plaques.plot
+```
+
+
+```{r}
+plot(sample_info_short$frac.tcells)
+sample_info_short$t_cell_content <- c('High', 'High', 'High', 'Low', 'Low', 'Low')
+```
+```{r}
+plot(sample_info_short$frac.macrophage)
+sample_info_short$macrophage_content <- c('High', 'Low', 'Low', 'High', 'Low', 'High')
+```
+
+```{r}
+cor(sample_info$ts.t_cell, sample_info$ts.macrophage, method = 'spearman')
+```
+
+```{r}
+clusters <- human_elastic_plaques_counts_s$sample_id
+clusters_macro <- clusters
+clusters_t_cells <- clusters
+for (i in names(clusters_macro)){
+  clusters_macro[i] <- sample_info_short$macrophage_content[sample_info_short$sample_id == clusters[i]]
+  clusters_t_cells[i] <- sample_info_short$t_cell_content[sample_info_short$sample_id == clusters[i]]
+}
+human_elastic_plaques_counts_s$macrophage_content <- clusters_new
+human_elastic_plaques_counts_s$macrophage_content_2 <- clusters_macro
+human_elastic_plaques_counts_s$t_cell_content <- clusters_t_cells
+```
+
+```{r}
+DimPlot(human_elastic_plaques_counts_s, split.by = 'macrophage_content_2') + NoLegend() + DimPlot(human_elastic_plaques_counts_s, split.by = 'macrophage_content') + NoLegend()
+```
+```{r}
+DimPlot(human_elastic_plaques_counts_s, split.by = 't_cell_content')
+```
+```{r}
+# Idents(human_elastic_plaques_counts_s) <- 'cluster_name_2'
+# for(i in levels(human_elastic_plaques_counts_s$cluster_name_2)){
+#   tmp <- FindMarkers(human_elastic_plaques_counts_s, ident.1 =  'High', ident.2 = 'Low', subset.ident = i , assay = 'RNA', logfc.threshold = 0.25, group.by = 'macrophage_content_2')
+#   tmp <- tmp[tmp$p_val_adj < 0.05, ]
+#   tmp$exp_high_macro_con <- rowMeans2(subset(human_elastic_plaques_counts_s, macrophage_content_2 == 'High' & cluster_name_2 == i)[["RNA"]]@data[rownames(tmp), ])
+#   tmp$exp_low_macro_con <- rowMeans2(subset(human_elastic_plaques_counts_s, macrophage_content_2 == 'Low' & cluster_name_2 == i)[["RNA"]]@data[rownames(tmp), ])
+#   colnames(tmp)[colnames(tmp) == 'pct.1'] <- 'pct_high_macro_con'
+#   colnames(tmp)[colnames(tmp) == 'pct.2'] <- 'pct_low_macro_con'
+#   xlsx::write.xlsx(tmp, file = "humans_carotid_high_low_macro_content.xlsx",
+#                    sheetName = paste0("Cluster_", i), 
+#                    col.names = TRUE, row.names = TRUE, append = TRUE)
+# }
+
+marker_list <- list()
+for(i in levels(human_elastic_plaques_counts_s$cluster_name_2)){
+  tmp <- FindMarkers(human_elastic_plaques_counts_s, ident.1 =  'High', ident.2 = 'Low', subset.ident = i , assay = 'RNA', logfc.threshold = 0.25, group.by = 'macrophage_content_2')
+  tmp <- tmp[tmp$p_val_adj < 0.05, ]
+  tmp$exp_high_macro_con <- rowMeans2(subset(human_elastic_plaques_counts_s, macrophage_content_2 == 'High' & cluster_name_2 == i)[["RNA"]]@data[rownames(tmp), ])
+  tmp$exp_low_macro_con <- rowMeans2(subset(human_elastic_plaques_counts_s, macrophage_content_2 == 'Low' & cluster_name_2 == i)[["RNA"]]@data[rownames(tmp), ])
+  colnames(tmp)[colnames(tmp) == 'pct.1'] <- 'pct_high_macro_con'
+  colnames(tmp)[colnames(tmp) == 'pct.2'] <- 'pct_low_macro_con'
+  marker_list[[i]] <- tmp
+}
+marker_list <- map(marker_list, ~ rownames_to_column(.x, var = "GeneName"))
+openxlsx::write.xlsx(marker_list, file = "humans_carotid_high_low_macro_content.xlsx", 
+                     asTable = TRUE, overwrite = TRUE)
+
+marker_list_tcell <- list()
+for(i in levels(human_elastic_plaques_counts_s$cluster_name_2)){
+  tmp <- FindMarkers(human_elastic_plaques_counts_s, ident.1 =  'High', ident.2 = 'Low', subset.ident = i , assay = 'RNA', logfc.threshold = 0.25, group.by = 't_cell_content')
+  tmp <- tmp[tmp$p_val_adj < 0.05, ]
+  tmp$exp_high_tcell_con <- rowMeans2(subset(human_elastic_plaques_counts_s, macrophage_content_2 == 'High' & cluster_name_2 == i)[["RNA"]]@data[rownames(tmp), ])
+  tmp$exp_low_tcell_con <- rowMeans2(subset(human_elastic_plaques_counts_s, macrophage_content_2 == 'Low' & cluster_name_2 == i)[["RNA"]]@data[rownames(tmp), ])
+  colnames(tmp)[colnames(tmp) == 'pct.1'] <- 'pct_high_tcell_con'
+  colnames(tmp)[colnames(tmp) == 'pct.2'] <- 'pct_low_tcell_con'
+  marker_list_tcell[[i]] <- tmp
+}
+marker_list_tcell <- map(marker_list_tcell, ~ rownames_to_column(.x, var = "GeneName"))
+openxlsx::write.xlsx(marker_list_tcell, file = "humans_carotid_high_low_tcell_content.xlsx", 
+                     asTable = TRUE, overwrite = TRUE)
+
+
+```
+
+
+```{r}
+
+metadata_m <- human_elastic_plaques_counts_s@meta.data
+metadata_m <-metadata_m[colnames(binaryRegulonActivity),]
+metadata_m <- cbind(metadata_m, t(binaryRegulonActivity))
+metadata_m <- metadata_m %>% mutate(group = paste(macrophage_content_2, cluster_name_2, sep = "_"), .after = nFeature_RNA)
+metadata_m$`ZXDC (12g)`
+tmp <- metadata_m %>% 
+  group_by(group) %>% 
+  dplyr::select(`AHR_extended (276g)`:`ZNF91 (200g)`) %>% 
+  summarise_all(list(A = ~sum(.x == 1), N = ~sum(.x == 0))) %>% 
+  as.data.frame()
+rownames(tmp) <- tmp$group
+tmp <- t(tmp[, -1])
+tmp <- tmp[order(rownames(tmp)), ]
+tmp <- data.frame(tmp)
+
+# Chisquare test
+
+my_func <- function(data) {
+  if(sum(is.na(data)) > 0) {
+    return(1)
+  } else {
+    ct <- chisq.test(data)
+    return(ct$p.value)
+  }
+}
+
+tmp_chisqp <- tmp %>% 
+  rownames_to_column(var = "group") %>% 
+  separate(group, c("tf", "status"), sep = "_") %>% 
+  group_by(tf) %>% 
+  summarise(C0_pval = my_func(data.frame(High_Contractile, Low_Contractile)),
+            C1_pval = my_func(data.frame(High_Immune_synthetic_1, Low_Immune_synthetic_1)),
+            C2_pval = my_func(data.frame(High_Immune_synthetic_2, Low_Immune_synthetic_2)),
+            C3_pval = my_func(data.frame(High_Osteogenic, Low_Osteogenic)),
+            C4_pval = my_func(data.frame(High_Synthetic, Low_Synthetic)),
+            C5_pval = my_func(data.frame(High_Unknown, Low_Unknown))
+            # C6_pval = my_func(data.frame(HFDControl_6, Humans_carotid_plaques_6, PCSK9_pigs_aorta_6)),
+            # C7_pval = my_func(data.frame(HFDControl_7, Humans_carotid_plaques_7, PCSK9_pigs_aorta_7)),
+            # C8_pval = my_func(data.frame(HFDControl_8, Humans_carotid_plaques_8, PCSK9_pigs_aorta_8)),
+            # C9_pval = my_func(data.frame(HFDControl_9, Humans_carotid_plaques_9, PCSK9_pigs_aorta_9))
+            )
+
+# tmp_chisqp <- tmp %>% 
+#   rownames_to_column(var = "group") %>% 
+#   separate(group, c("tf", "status"), sep = "_") %>% 
+#   group_by(tf) %>% 
+#   summarise(C0_pval = my_func(data.frame(HFDControl_0, Humans_Pigs_0)),
+#             C1_pval = my_func(data.frame(HFDControl_1, Humans_Pigs_1)),
+#             C2_pval = my_func(data.frame(HFDControl_2, Humans_Pigs_2)),
+#             C3_pval = my_func(data.frame(HFDControl_3, Humans_Pigs_3)),
+#             C4_pval = my_func(data.frame(HFDControl_4, Humans_Pigs_4)),
+#             C5_pval = my_func(data.frame(HFDControl_5, Humans_Pigs_5)),
+#             C6_pval = my_func(data.frame(HFDControl_6, Humans_Pigs_6)),
+#             C7_pval = my_func(data.frame(HFDControl_7, Humans_Pigs_7)),
+#             C8_pval = my_func(data.frame(HFDControl_8, Humans_Pigs_8)),
+#             C9_pval = my_func(data.frame(HFDControl_9, Humans_Pigs_9)))
+
+
+rownames(tmp_chisqp) <- tmp_chisqp$tf
+
+
+tmp_chisqp_adj <- data.frame(matrix(NA,    # Create empty data frame
+                          nrow = 249,
+                          ncol = 12))
+
+tmp_chisqp_adj[,1] <- tmp_chisqp$tf
+#tmp_chisqp_adj <- tmp_chisqp_adj[,2]
+for(i in 2:7){
+  tmp_chisqp_adj[,i] <- p.adjust(p = unlist(tmp_chisqp[,i]), method = 'BH')
+}
+colnames(tmp_chisqp_adj) <- colnames(tmp_chisqp)
+
+table(tmp_chisqp_adj > 0.05)
+
+##Fisher exact test implementation
+my_func <- function(data) {
+  if(sum(is.na(data)) < 0) {
+    return('Nan')
+  } else {
+    ct <- fisher.test(data)
+    return(ct$p.value)
+  }
+}
+
+tmp_fisherp <- tmp %>% 
+  rownames_to_column(var = "group") %>% 
+  separate(group, c("tf", "status"), sep = "_") %>% 
+  group_by(tf) %>% 
+  summarise(C0_pval = my_func(data.frame(High_Contractile, Low_Contractile)),
+            C1_pval = my_func(data.frame(High_Immune_synthetic_1, Low_Immune_synthetic_1)),
+            C2_pval = my_func(data.frame(High_Immune_synthetic_2, Low_Immune_synthetic_2)),
+            C3_pval = my_func(data.frame(High_Osteogenic, Low_Osteogenic)),
+            C4_pval = my_func(data.frame(High_Synthetic, Low_Synthetic)),
+            C5_pval = my_func(data.frame(High_Unknown, Low_Unknown))
+            )
+
+rownames(tmp_fisherp) <- tmp_fisherp$tf
+
+
+tmp_fisherp_adj <- data.frame(matrix(NA,    # Create empty data frame
+                          nrow = 249,
+                          ncol = 7))
+
+tmp_fisherp_adj[,1] <- tmp_fisherp$tf
+#tmp_chisqp_adj <- tmp_chisqp_adj[,2]
+for(i in 2:7){
+  tmp_fisherp_adj[,i] <- p.adjust(p = unlist(tmp_fisherp[,i]), method = 'BH')
+}
+colnames(tmp_fisherp_adj) <- colnames(tmp_fisherp)
+
+table(tmp_fisherp_adj > 0.05)
+
+
+tmp$regulon <- rownames(tmp)
+write.xlsx(tmp, 'regulons_comparison_human_carotids_macrophage_content_2.xlsx')
+write.xlsx(tmp_fisherp, 'fisher_reg_human_carotids_macrophage_content_2.xlsx')
+
+tfs <- tmp_fisherp_adj$tf
+b <- gsub('_', ' ', tfs)
+tmp_fisherp_adj$Regulon_short_name <- word(b, 1)
+write.xlsx(tmp_fisherp_adj, 'tmp_fisherp_adj_reg_human_carotids_macrophage_content_2.xlsx')
+
+
+write.xlsx(tmp_chisqp, 'chisq_reg_human_carotids_macrophage_content_2.xlsx')
+write.xlsx(tmp_chisqp_adj, 'chisq_reg_adj_human_carotids_macrophage_content_2.xlsx')
+
+```
+
+```{r}
+##Save regulon activity to Seurat Objects
+regulonAUC@NAMES
+regulonAUC@colData
+tfs <- regulonAUC@assays@data@listData[["AUC"]]
+b <- gsub('_', ' ', rownames(tfs))
+rownames(tfs) <- word(b, 1)
+rownames(tfs) <- paste0('tf_', rownames(tfs))
+mice_metadata <- human_elastic_plaques_counts_s@meta.data
+
+human_elastic_plaques_counts_s@meta.data <- cbind(mice_metadata, t(tfs))
+saveRDS(human_elastic_plaques_counts_s, 'human_elastic_plaques_counts_s+tf.rds')
+```
+
+Top statistically significantly upregulated TFs in SOX9 according to SCENIC results 
+```{r, echo=FALSE, fig.width=10, fig.height=8}
+VlnPlot(human_elastic_plaques_counts_s, features = c("tf_REL", 'tf_RELB', 'tf_NFKB1', 'tf_NFKB2'), split.by = 'macrophage_content_2') + RestoreLegend()
+DimPlot(human_elastic_plaques_counts_s)
+FeaturePlot(human_elastic_plaques_counts_s, features = c("tf_REL", 'tf_RELB', 'tf_NFKB1', 'tf_NFKB2'), split.by = 'macrophage_content_2', pt.size = 0.5)
+```
+
+
+
+
+
+# SessionInfo
+```{r sessionInfo}
+date()
+sessionInfo()
+```
+
+# References
+

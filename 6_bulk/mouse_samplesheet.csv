@@ -1,0 +1,12 @@
+sample,fastq_1,fastq_2,strandedness,group,genotype,sex
+A_1,/faststorage/project/THOR/rna-seq/cross_species/mouse/SRR19632403.fastq.gz,,auto,hfd3m,LDLR-DKO_ApoB100-100,female
+A_2,/faststorage/project/THOR/rna-seq/cross_species/mouse/SRR19632404.fastq.gz,,auto,hfd3m,LDLR-DKO_ApoB100-100,male
+A_3,/faststorage/project/THOR/rna-seq/cross_species/mouse/SRR19632405.fastq.gz,,auto,hfd3m,LDLR-DKO_ApoB100-100,male
+A_4,/faststorage/project/THOR/rna-seq/cross_species/mouse/SRR19632406.fastq.gz,,auto,hfd3m,LDLR-DKO_ApoB100-100,male
+A_5,/faststorage/project/THOR/rna-seq/cross_species/mouse/SRR19632407.fastq.gz,,auto,hfd3m,LDLR-DKO_ApoB100-100,male
+C_1,/faststorage/project/THOR/rna-seq/cross_species/mouse/SRR19632420.fastq.gz,,auto,chow,WT,female
+C_2,/faststorage/project/THOR/rna-seq/cross_species/mouse/SRR19632421.fastq.gz,,auto,chow,WT,male
+C_3,/faststorage/project/THOR/rna-seq/cross_species/mouse/SRR19632422.fastq.gz,,auto,chow,WT,male
+C_4,/faststorage/project/THOR/rna-seq/cross_species/mouse/SRR19632423.fastq.gz,,auto,chow,WT,female
+C_5,/faststorage/project/THOR/rna-seq/cross_species/mouse/SRR19632424.fastq.gz,,auto,chow,WT,male
+C_6,/faststorage/project/THOR/rna-seq/cross_species/mouse/SRR19632425.fastq.gz,,auto,chow,WT,male

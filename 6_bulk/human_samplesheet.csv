@@ -1,0 +1,9 @@
+sample,fastq_1,fastq_2,strandedness,group,patient
+P1_S,/faststorage/project/THOR/rna-seq/cross_species/human/SRR7905615_1.fastq.gz,/faststorage/project/THOR/rna-seq/cross_species/human/SRR7905615_2.fastq.gz,unstranded,stable,Patient_1
+P1_U,/faststorage/project/THOR/rna-seq/cross_species/human/SRR7905616_2.fastq.gz,/faststorage/project/THOR/rna-seq/cross_species/human/SRR7905616_1.fastq.gz,unstranded,unstable,Patient_1
+P2_S,/faststorage/project/THOR/rna-seq/cross_species/human/SRR7905617_1.fastq.gz,/faststorage/project/THOR/rna-seq/cross_species/human/SRR7905617_2.fastq.gz,unstranded,stable,Patient_2
+P2_U,/faststorage/project/THOR/rna-seq/cross_species/human/SRR7905618_1.fastq.gz,/faststorage/project/THOR/rna-seq/cross_species/human/SRR7905618_2.fastq.gz,unstranded,unstable,Patient_2
+P3_S,/faststorage/project/THOR/rna-seq/cross_species/human/SRR7905619_1.fastq.gz,/faststorage/project/THOR/rna-seq/cross_species/human/SRR7905619_2.fastq.gz,unstranded,stable,Patient_3
+P3_U,/faststorage/project/THOR/rna-seq/cross_species/human/SRR7905620_1.fastq.gz,/faststorage/project/THOR/rna-seq/cross_species/human/SRR7905620_2.fastq.gz,unstranded,unstable,Patient_3
+P4_S,/faststorage/project/THOR/rna-seq/cross_species/human/SRR7905621_1.fastq.gz,/faststorage/project/THOR/rna-seq/cross_species/human/SRR7905621_2.fastq.gz,unstranded,stable,Patient_4
+P4_U,/faststorage/project/THOR/rna-seq/cross_species/human/SRR7905622_1.fastq.gz,/faststorage/project/THOR/rna-seq/cross_species/human/SRR7905622_2.fastq.gz,unstranded,unstable,Patient_4

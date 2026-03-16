@@ -1,0 +1,7 @@
+sample,fastq_1,fastq_2,strandedness,group
+C_1,/faststorage/project/THOR/rna-seq/cross_species/pig/SRR26403097_1.fastq.gz,/faststorage/project/THOR/rna-seq/cross_species/pig/SRR26403097_2.fastq.gz,unstranded,Normal_chow_diet
+C_2,/faststorage/project/THOR/rna-seq/cross_species/pig/SRR26403098_1.fastq.gz,/faststorage/project/THOR/rna-seq/cross_species/pig/SRR26403098_2.fastq.gz,unstranded,Normal_chow_diet
+C_3,/faststorage/project/THOR/rna-seq/cross_species/pig/SRR26403099_1.fastq.gz,/faststorage/project/THOR/rna-seq/cross_species/pig/SRR26403099_2.fastq.gz,unstranded,Normal_chow_diet
+A_1,/faststorage/project/THOR/rna-seq/cross_species/pig/SRR26403100_1.fastq.gz,/faststorage/project/THOR/rna-seq/cross_species/pig/SRR26403100_2.fastq.gz,unstranded,High_fat_high_cholesterol_and_high_fructose_diet
+A_2,/faststorage/project/THOR/rna-seq/cross_species/pig/SRR26403101_1.fastq.gz,/faststorage/project/THOR/rna-seq/cross_species/pig/SRR26403101_2.fastq.gz,unstranded,High_fat_high_cholesterol_and_high_fructose_diet
+A_3,/faststorage/project/THOR/rna-seq/cross_species/pig/SRR26403102_1.fastq.gz,/faststorage/project/THOR/rna-seq/cross_species/pig/SRR26403102_2.fastq.gz,unstranded,High_fat_high_cholesterol_and_high_fructose_diet

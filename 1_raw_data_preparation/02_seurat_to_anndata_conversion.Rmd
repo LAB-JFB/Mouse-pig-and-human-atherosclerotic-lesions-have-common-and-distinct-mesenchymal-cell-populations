@@ -1,0 +1,95 @@
+---
+title: "Seurat to AnnData Conversion"
+output: html_notebook
+---
+
+Reads intermediate .h5ad files (converted from Seurat), adds QC metrics
+(mitochondrial, ribosomal, hemoglobin), fixes raw var index, and writes
+clean .h5ad files ready for BENGAL input.
+
+- Input: `sscrofa_i.h5ad`, `athero_comb_i.h5ad`, `mice_hfdc_i.h5ad`
+- Output: `sscrofa.h5ad`, `hsapiens.h5ad`, `mmusculus.h5ad`
+
+## Process pig (Sus scrofa)
+
+```{python}
+import scanpy as sc
+import numpy as np
+
+adata = sc.read("sscrofa_i.h5ad")
+# mitochondrial genes
+adata.var['mt'] = adata.var_names.str.startswith('MT-')
+# ribosomal genes
+adata.var['ribo'] = adata.var_names.str.startswith(("RPS", "RPL"))
+# hemoglobin genes.
+adata.var['hb'] = adata.var_names.str.contains(("^HB[^(P)]"))
+sc.pp.calculate_qc_metrics(adata, qc_vars=['mt', 'ribo', 'hb'], percent_top=None, log1p=False, inplace=True)
+mito_genes = adata.var_names.str.startswith('MT-')
+# for each cell compute fraction of counts in mito genes vs. all genes
+# the `.A1` is only necessary as X is sparse (to transform to a dense array after summing)
+# adata.obs['percent_mt2'] = np.sum( adata[:, mito_genes].X, axis=1).A1 / np.sum(adata.X, axis=1).A1
+# add the total counts per cell as observations-annotation to adata
+adata.obs['n_counts'] = adata.X.sum(axis=1).A1
+adata.__dict__['_raw'].__dict__['_var'] = adata.__dict__['_raw'].__dict__['_var'].rename(columns={'_index': 'features'})
+del adata.raw
+# adata._raw._var.rename(columns={'_index': 'features'}, inplace=True)
+save_file = 'sscrofa.h5ad'
+adata.write_h5ad(save_file)
+```
+
+## Process human (Homo sapiens)
+
+```{python}
+import scanpy as sc
+import numpy as np
+
+adata = sc.read("athero_comb_i.h5ad")
+# mitochondrial genes
+adata.var['mt'] = adata.var_names.str.startswith('MT-')
+# ribosomal genes
+adata.var['ribo'] = adata.var_names.str.startswith(("RPS", "RPL"))
+# hemoglobin genes.
+adata.var['hb'] = adata.var_names.str.contains(("^HB[^(P)]"))
+sc.pp.calculate_qc_metrics(adata, qc_vars=['mt', 'ribo', 'hb'], percent_top=None, log1p=False, inplace=True)
+mito_genes = adata.var_names.str.startswith('MT-')
+# for each cell compute fraction of counts in mito genes vs. all genes
+# the `.A1` is only necessary as X is sparse (to transform to a dense array after summing)
+# adata.obs['percent_mt2'] = np.sum( adata[:, mito_genes].X, axis=1).A1 / np.sum(adata.X, axis=1).A1
+# add the total counts per cell as observations-annotation to adata
+adata.obs['n_counts'] = adata.X.sum(axis=1).A1
+adata.__dict__['_raw'].__dict__['_var'] = adata.__dict__['_raw'].__dict__['_var'].rename(columns={'_index': 'features'})
+del adata.raw
+# adata._raw._var.rename(columns={'_index': 'features'}, inplace=True)
+save_file = 'hsapiens.h5ad'
+adata.write_h5ad(save_file)
+```
+
+## Process mouse (Mus musculus)
+
+```{python}
+import scanpy as sc
+import numpy as np
+
+adata = sc.read("mice_hfdc_i.h5ad")
+if 'orig.ident' in adata.obs.columns and adata.obs['orig.ident'].dtype != str:adata.obs['orig.ident'] = adata.obs['orig.ident'].astype(str)
+if 'dataset' in adata.obs.columns and adata.obs['dataset'].dtype != str:adata.obs['dataset'] = adata.obs['dataset'].astype(str)
+
+# mitochondrial genes
+adata.var['mt'] = adata.var_names.str.startswith('mt-')
+# ribosomal genes
+adata.var['ribo'] = adata.var_names.str.startswith(("Rps", "Rpl"))
+# hemoglobin genes.
+adata.var['hb'] = adata.var_names.str.contains(("^Hb[^(p)]"))
+sc.pp.calculate_qc_metrics(adata, qc_vars=['mt', 'ribo', 'hb'], percent_top=None, log1p=False, inplace=True)
+mito_genes = adata.var_names.str.startswith('mt-')
+# for each cell compute fraction of counts in mito genes vs. all genes
+# the `.A1` is only necessary as X is sparse (to transform to a dense array after summing)
+# adata.obs['percent_mt2'] = np.sum( adata[:, mito_genes].X, axis=1).A1 / np.sum(adata.X, axis=1).A1
+# add the total counts per cell as observations-annotation to adata
+adata.obs['n_counts'] = adata.X.sum(axis=1).A1
+adata.__dict__['_raw'].__dict__['_var'] = adata.__dict__['_raw'].__dict__['_var'].rename(columns={'_index': 'features'})
+del adata.raw
+# adata._raw._var.rename(columns={'_index': 'features'}, inplace=True)
+save_file = 'mmusculus.h5ad'
+adata.write_h5ad(save_file)
+```
