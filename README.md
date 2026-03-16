@@ -91,7 +91,7 @@ Only our run-specific configuration and metadata files are included in this repo
 
 ### To reproduce
 
-1. Clone the [BENGAL repository](https://github.com/TODO/BENGAL)
+1. Clone the [BENGAL repository] https://github.com/Papatheodorou-Group/BENGAL
 2. Copy the config files into the BENGAL `config/` directory
 3. Copy the metadata `.tsv` files into the BENGAL root directory
 4. Adjust absolute paths in the config files to match your environment
